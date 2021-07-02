@@ -104,7 +104,7 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
     pendulum dataset generation
     provided by Peter: ask him for issues with the dataset generation
     """
-    t = np.expand_dims(np.linspace(0, 10 * traj_samples, num=traj_samples), axis=0).repeat(batch_size, axis=0)
+    t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
     k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
     # finding what q (angle) and p (angular momentum) correspond to the time
@@ -130,16 +130,19 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
     return k2, data
 
 
-k2, data = pendulum_train_gen(2, noise=0)
-for traj in data:
-    plt.scatter(traj[:, 0][0:10], traj[:, 1][0:10], s=5.)
-    plt.scatter(traj[:, 0][50:60], traj[:, 1][50:60], s=5.)
+class PendulumDataset(torch.utils.data.Dataset):
+    def __init__(self, size=10240, trajectory_length=100, noise=0.05):
+        self.size = size,
+        self.k2, self.data = pendulum_train_gen(size, noise=noise)
+        self.trajectory_length = trajectory_length
 
-plt.xlabel(r"angle $\theta$")
-plt.ylabel(r"angular momentum $L$")
-plt.savefig('/home/darumen/Desktop/prototyping/dataset.png', dpi=300)
-print('hello')
-exit()
+    def __getitem__(self, idx):
+        i = random.randint(0, self.trajectory_length - 1)
+        j = random.randint(0, self.trajectory_length - 1)
+        return self.data[idx][i], self.data[idx][j], self.k2[idx]  # [first_view, second_view, energy]
+
+    def __len__(self):
+        return self.size
 
 
 # models
