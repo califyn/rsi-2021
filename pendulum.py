@@ -7,7 +7,6 @@ import argparse
 import time
 import torch.nn.functional as F
 import torch.nn as nn
-from tqdm import tqdm
 import torchvision
 import torchvision.transforms as T
 import random
@@ -99,9 +98,12 @@ def info_nce(z1, z2, temperature=0.1):
     return loss
 
 
-# pendulum dataset
-# provided by Peter: ask him for issues with the dataset generation
+# dataset
 def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, check_energy=False, k2=None):
+    """
+    pendulum dataset generation
+    provided by Peter: ask him for issues with the dataset generation
+    """
     t = np.expand_dims(np.linspace(0, 10 * traj_samples, num=traj_samples), axis=0).repeat(batch_size, axis=0)
     k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
@@ -138,71 +140,6 @@ plt.ylabel(r"angular momentum $L$")
 plt.savefig('/home/darumen/Desktop/prototyping/dataset.png', dpi=300)
 print('hello')
 exit()
-
-
-# transforms
-class DatasetDefinitionTransform:
-    def __init__(self, crop_scale_lower_bound, jitter_magnitude):
-        def f(x):
-            output = torch.zeros(3, 28, 28)
-            output[random.randint(0, 2)] = x
-            return output
-
-        self.transform = T.Compose(
-            [
-                T.ToTensor(),
-                T.Lambda(f),  # RGB
-                T.ToPILImage(),
-                T.RandomResizedCrop(size=28, scale=(crop_scale_lower_bound, 1.0)),  # Crop
-                T.ColorJitter(0.4 * jitter_magnitude, 0.4 * jitter_magnitude, 0.4 * jitter_magnitude,
-                              0.1 * jitter_magnitude),
-                T.ToTensor()
-            ]
-        )
-
-    def __call__(self, x):
-        return self.transform(x)
-
-
-class ContrastiveLearningTransform:
-    def __init__(self, crop_dat, crop_cl, jitter_dat, jitter_cl, type_tr):
-        self.dataset_transform = DatasetDefinitionTransform(crop_dat, jitter_dat)
-        self.crop_transform = T.RandomResizedCrop(size=28, scale=(crop_cl, 1.0))
-        self.jitter_transform = T.ColorJitter(0.4 * jitter_cl, 0.4 * jitter_cl, 0.4 * jitter_cl, 0.1 * jitter_cl)
-        self.tensor_transform = T.ToTensor()
-        self.pil_transform = T.ToPILImage()
-        self.composition = T.Compose(
-            [
-                self.pil_transform,
-                self.crop_transform,
-                self.jitter_transform,
-                self.tensor_transform
-            ]
-        )
-        self.crop = T.Compose(
-            [
-                self.pil_transform,
-                self.crop_transform,
-                self.tensor_transform
-            ]
-        )
-        self.jitter = T.Compose(
-            [
-                self.pil_transform,
-                self.jitter_transform,
-                self.tensor_transform
-            ]
-        )
-        self.type = type_tr
-
-    def __call__(self, x):
-        x = self.dataset_transform(x)
-        if self.type == 'composition':
-            return self.composition(x), self.composition(x), x
-        elif self.type == 'decoupled':
-            return self.crop(x), self.crop(x), self.jitter(x), self.jitter(x), x
-        else:
-            raise
 
 
 # models
@@ -255,8 +192,6 @@ class Branch(nn.Module):
             self.encoder,
             self.projector
         )
-        self.alpha_crop = nn.Parameter(0.5 * torch.ones([1]), requires_grad=True)
-        self.alpha_jitter = nn.Parameter(0.5 * torch.ones([1]), requires_grad=True)
 
     def forward(self, x):
         return self.net(x)
@@ -265,72 +200,33 @@ class Branch(nn.Module):
 # loops
 
 def plotting_loop():
-    dataset = torchvision.datasets.MNIST(
-        '../Data', train=True, transform=DatasetDefinitionTransform(
-            0.2, 1.0), download=True
-    )
-    cl_dataset = torchvision.datasets.MNIST(
-        '../Data', train=True, transform=ContrastiveLearningTransform(
-            0.2, 1.0, 1., 0.5, 'composition'), download=True
-    )
-    a = dataset.__getitem__(0)[0]
-    b1 = cl_dataset.__getitem__(0)[0][0]
-    b2 = cl_dataset.__getitem__(0)[0][1]
-
-    plt.imshow(a.permute(1, 2, 0))
-    plt.savefig('/home/darumen/Desktop/a.png', dpi=300)
-    plt.imshow(b1.permute(1, 2, 0))
-    plt.savefig('/home/darumen/Desktop/b1.png', dpi=300)
-    plt.imshow(b2.permute(1, 2, 0))
-    plt.savefig('/home/darumen/Desktop/b2.png', dpi=300)
-    print("saved plots")
+    pass
 
 
 def training_loop(args, encoder=None):
-    dataloader_kwargs = dict(drop_last=True, pin_memory=True, num_workers=16)
-
+    # dataset
+    dataloader_kwargs = dict(drop_last=True, pin_memory=True, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=torchvision.datasets.MNIST(
-            '../Data', train=True, transform=ContrastiveLearningTransform(
-                args.crop_dat, args.crop_cl, args.jitter_dat, args.jitter_cl, args.cl_aug_type), download=True
-        ),
+        dataset=PendulumDataset(),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
     )
-    memory_loader = torch.utils.data.DataLoader(
-        dataset=torchvision.datasets.MNIST(
-            '../Data', train=True, transform=DatasetDefinitionTransform(
-                args.crop_dat, args.jitter_dat), download=True
-        ),
-        shuffle=False,
-        batch_size=args.bsz,
-        **dataloader_kwargs
-    )
-    test_loader = torch.utils.data.DataLoader(
-        dataset=torchvision.datasets.MNIST(
-            '../Data', train=False, transform=DatasetDefinitionTransform(
-                args.crop_dat, args.jitter_dat), download=True
-        ),
-        shuffle=False,
-        batch_size=args.bsz,
-        **dataloader_kwargs
-    )
 
+    # model
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder).cuda()
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
     # optimization
-    optimizer = get_optimizer(
-        name='sgd',
+    optimizer = torch.optim.SGD(
+        main_branch.parameters(),
         momentum=0.9,
         lr=args.lr,
-        model=main_branch,
         weight_decay=args.wd
     )
-    lr_scheduler = LR_Scheduler(
+    lr_scheduler = LRScheduler(
         optimizer=optimizer,
         warmup_epochs=args.warmup_epochs,
         warmup_lr=0,
@@ -341,11 +237,10 @@ def training_loop(args, encoder=None):
         constant_predictor_lr=True
     )
     if args.dim_pred:
-        pred_optimizer = get_optimizer(
-            name='sgd',
+        pred_optimizer = torch.optim.SGD(
+            h.parameters(),
             momentum=0.9,
             lr=args.lr,
-            model=h,
             weight_decay=args.wd
         )
 
@@ -360,12 +255,8 @@ def training_loop(args, encoder=None):
     def apply_loss(z1, z2):
         if args.loss == 'square':
             loss = (z1 - z2).pow(2).sum()
-        elif args.loss == 'mse':
-            loss = F.mse_loss(z1, z2)
-        elif args.loss == 'cosine':
-            loss = F.cosine_similarity(z1, z2, dim=-1).mean()
         elif args.loss == 'infonce':
-            loss = 0.5 * info_nce(z1, z2) + info_nce(z2, z1)
+            loss = 0.5 * info_nce(z1, z2) + 0.5 * info_nce(z2, z1)
         elif args.loss == 'cosine_predictor':
             p1 = h(z1)
             p2 = h(z2)
@@ -375,14 +266,8 @@ def training_loop(args, encoder=None):
     # logging
     start = time.time()
     os.makedirs(args.path_dir, exist_ok=True)
-    file_to_update = open(os.path.join(args.path_dir, 'knn_and_loss.log'), 'w')
+    file_to_update = open(os.path.join(args.path_dir, 'training_loss.log'), 'w')
     torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, '0.pth'))
-
-    knn_acc = knn_loop(b, memory_loader, test_loader)
-    line_to_print = f'epoch: {0} | knn_acc: {knn_acc:.3f}  | time_elapsed: {time.time() - start:.3f}'
-    file_to_update.write(line_to_print + '\n')
-    file_to_update.flush()
-    print(line_to_print)
 
     # training
     for e in range(1, args.epochs + 1):
@@ -399,32 +284,9 @@ def training_loop(args, encoder=None):
                 h.zero_grad()
 
             # forward pass
-            if args.cl_train_type == 'standard':
-                assert args.cl_aug_type == 'composition'
-                z1 = get_z(inputs[0].cuda())
-                z2 = get_z(inputs[1].cuda())
-                loss = apply_loss(z1, z2)
-            elif args.cl_train_type == 'stochastic':
-                assert args.cl_aug_type == 'decoupled'
-                choice = random.randint(0, 1)
-                z1 = get_z(inputs[choice * 2 + 0].cuda())
-                z2 = get_z(inputs[choice * 2 + 1].cuda())
-                loss = apply_loss(z1, z2)
-            elif args.cl_train_type in ['joint', 'trainable_joint']:
-                assert args.cl_aug_type == 'decoupled'
-                z1_crop = get_z(inputs[0].cuda())
-                z2_crop = get_z(inputs[1].cuda())
-                z1_jitter = get_z(inputs[2].cuda())
-                z2_jitter = get_z(inputs[3].cuda())
-                loss_crop = apply_loss(z1_crop, z2_crop)
-                loss_jitter = apply_loss(z1_jitter, z2_jitter)
-                if args.cl_train_type == 'joint':
-                    loss = 0.5 * loss_crop + 0.5 * loss_jitter
-                else:
-                    assert args.loss == 'infonce'  # otherwise, it will learn zero alphas
-                    loss = main_branch.alpha_crop * loss_crop + main_branch.alpha_jitter * loss_jitter
-            else:
-                pass
+            z1 = get_z(inputs[0].cuda())
+            z2 = get_z(inputs[1].cuda())
+            loss = apply_loss(z1, z2)
 
             # optimization step
             loss.backward()
@@ -434,16 +296,18 @@ def training_loop(args, encoder=None):
                 pred_optimizer.step()
 
         if e % args.save_every == 0:
-            knn_acc = knn_loop(b, memory_loader, test_loader)
-            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()),
-                       os.path.join(args.path_dir, f'{e}.pth'))
-            line_to_print = f'epoch: {e} | knn_acc: {knn_acc:.3f} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
             file_to_update.write(line_to_print + '\n')
             file_to_update.flush()
             print(line_to_print)
 
     file_to_update.close()
     return main_branch.encoder
+
+
+def analysis_loop(args):
+    pass
 
 
 def main(args):
