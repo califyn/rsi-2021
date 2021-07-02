@@ -128,7 +128,7 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
 
 
 class PendulumDataset(torch.utils.data.Dataset):
-    def __init__(self, size=10240, trajectory_length=100, noise=0.05):
+    def __init__(self, size=10240, trajectory_length=100, noise=0.00):
         self.size = size
         self.k2, self.data = pendulum_train_gen(size, noise=noise)
         self.trajectory_length = trajectory_length
@@ -196,12 +196,18 @@ class Branch(nn.Module):
                 nn.Linear(64, 64),
                 nn.BatchNorm1d(64),
                 nn.ReLU(inplace=True),
+                nn.Linear(64, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
                 nn.Linear(64, 3)
             )  # simple encoder to start with
             # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
             # TODO: replace the encoder with CNN once we have 2D dataset
             # self.encoder.fc = nn.Identity()  # replace the classification head with identity
-        # self.projector = ProjectionMLP(512, proj_hidden, proj_dim, affine=affine, deeper=deeper)
+        # self.projector = ProjectionMLP(32, 64, 32, affine=affine, deeper=deeper)
         self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
         self.net = nn.Sequential(
             self.encoder,
@@ -214,9 +220,14 @@ class Branch(nn.Module):
 
 # loops
 
-def plotting_loop():
+def plotting_loop(args):
     # TODO: can be used to plot the data in 2D.
-    pass
+    k2, data = pendulum_train_gen(100, noise=0.05)
+    for traj in data:
+        plt.scatter(traj[:, 0], traj[:, 1], s=5.)
+    plt.xlabel(r"angle $\theta$")
+    plt.ylabel(r"angular momentum $L$")
+    plt.savefig(os.path.join(args.path_dir, 'dataset.png'), dpi=300)
 
 
 def training_loop(args, encoder=None):
@@ -342,14 +353,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dim_proj', default='1024,128', type=str)
     parser.add_argument('--dim_pred', default=None, type=int)
-    parser.add_argument('--epochs', default=200, type=int)
-    parser.add_argument('--lr', default=0.1, type=float)
+    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--lr', default=0.02, type=float)
     parser.add_argument('--bsz', default=512, type=int)
     parser.add_argument('--wd', default=0.001, type=float)
     parser.add_argument('--loss', default='infonce', type=str)
     parser.add_argument('--affine', action='store_false')
     parser.add_argument('--deeper', action='store_false')
-    parser.add_argument('--save_every', default=10, type=int)
+    parser.add_argument('--save_every', default=100, type=int)
     parser.add_argument('--warmup_epochs', default=5, type=int)
     parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis'])
