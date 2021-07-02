@@ -54,11 +54,7 @@ class LRScheduler(object):
 
     def step(self):
         for param_group in self.optimizer.param_groups:
-
-            if self.constant_predictor_lr and param_group['name'] == 'predictor':
-                param_group['lr'] = self.base_lr
-            else:
-                lr = param_group['lr'] = self.lr_schedule[self.iter]
+            lr = param_group['lr'] = self.lr_schedule[self.iter]
 
         self.iter += 1
         self.current_lr = lr
@@ -68,6 +64,7 @@ class LRScheduler(object):
         return self.current_lr
 
 
+# loss functions for contrastive learning
 def negative_cosine_similarity(p, z):
     """
     Negative cosine similarity.
@@ -93,7 +90,7 @@ def info_nce(z1, z2, temperature=0.1):
     logits = z1 @ z2.T
     logits /= temperature
     n = z1.shape[0]
-    labels = torch.arange(0, n, dtype=torch.long).cuda()
+    labels = torch.arange(0, n, dtype=torch.long)
     loss = torch.nn.functional.cross_entropy(logits, labels)
     return loss
 
@@ -132,14 +129,18 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
 
 class PendulumDataset(torch.utils.data.Dataset):
     def __init__(self, size=10240, trajectory_length=100, noise=0.05):
-        self.size = size,
+        self.size = size
         self.k2, self.data = pendulum_train_gen(size, noise=noise)
         self.trajectory_length = trajectory_length
 
     def __getitem__(self, idx):
         i = random.randint(0, self.trajectory_length - 1)
         j = random.randint(0, self.trajectory_length - 1)
-        return self.data[idx][i], self.data[idx][j], self.k2[idx]  # [first_view, second_view, energy]
+        return [
+            torch.FloatTensor(self.data[idx][i]),
+            torch.FloatTensor(self.data[idx][j]),
+            self.k2[idx]
+        ]  # [first_view, second_view, energy]
 
     def __len__(self):
         return self.size
@@ -188,9 +189,20 @@ class Branch(nn.Module):
         if encoder:
             self.encoder = encoder
         else:
-            self.encoder = torchvision.models.resnet18(zero_init_residual=True)
-            self.encoder.fc = nn.Identity()  # replace the classification head with identity
-        self.projector = ProjectionMLP(512, proj_hidden, proj_dim, affine=affine, deeper=deeper)
+            self.encoder = nn.Sequential(
+                nn.Linear(2, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 3)
+            )  # simple encoder to start with
+            # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
+            # TODO: replace the encoder with CNN once we have 2D dataset
+            # self.encoder.fc = nn.Identity()  # replace the classification head with identity
+        # self.projector = ProjectionMLP(512, proj_hidden, proj_dim, affine=affine, deeper=deeper)
+        self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
         self.net = nn.Sequential(
             self.encoder,
             self.projector
@@ -203,6 +215,7 @@ class Branch(nn.Module):
 # loops
 
 def plotting_loop():
+    # TODO: can be used to plot the data in 2D.
     pass
 
 
@@ -218,7 +231,7 @@ def training_loop(args, encoder=None):
 
     # model
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
-    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder).cuda()
+    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
@@ -280,15 +293,15 @@ def training_loop(args, encoder=None):
             h.train()
 
         # epoch
-        for it, (inputs, y) in enumerate(train_loader):
+        for it, (x1, x2, energy) in enumerate(train_loader):
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
                 h.zero_grad()
 
             # forward pass
-            z1 = get_z(inputs[0].cuda())
-            z2 = get_z(inputs[1].cuda())
+            z1 = get_z(x1)
+            z2 = get_z(x2)
             loss = apply_loss(z1, z2)
 
             # optimization step
@@ -310,6 +323,7 @@ def training_loop(args, encoder=None):
 
 
 def analysis_loop(args):
+    # TODO: can be used to study if the neural network has learned the conserved quantity.
     pass
 
 
@@ -328,8 +342,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dim_proj', default='1024,128', type=str)
     parser.add_argument('--dim_pred', default=None, type=int)
-    parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--lr', default=0.02, type=float)
+    parser.add_argument('--epochs', default=200, type=int)
+    parser.add_argument('--lr', default=0.1, type=float)
     parser.add_argument('--bsz', default=512, type=int)
     parser.add_argument('--wd', default=0.001, type=float)
     parser.add_argument('--loss', default='infonce', type=str)
@@ -337,7 +351,7 @@ if __name__ == '__main__':
     parser.add_argument('--deeper', action='store_false')
     parser.add_argument('--save_every', default=10, type=int)
     parser.add_argument('--warmup_epochs', default=5, type=int)
-    parser.add_argument('--mode', default='plot', type=str,
+    parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis'])
     parser.add_argument('--path_dir', default='../output/pendulum', type=str)
 
