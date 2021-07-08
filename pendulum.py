@@ -27,14 +27,14 @@ def set_deterministic(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def most_recent_file(folder):
+def most_recent_file(folder, ext=""):
     max_time = 0
     max_file = ""
     for dirname, subdirs, files in os.walk(folder):
         for fname in files:
             full_path = os.path.join(dirname, fname)
             time = os.stat(full_path).st_mtime
-            if time > max_time:
+            if time > max_time and full_path.endswith(ext):
                 max_time = time
                 max_file = full_path
 
@@ -321,11 +321,9 @@ def training_loop(args, encoder=None):
         main_branch.train()
         if args.dim_pred:
             h.train()
-        print("train")
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
-            print("data")
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
@@ -354,7 +352,7 @@ def training_loop(args, encoder=None):
     return main_branch.encoder
 
 
-def analysis_loop(args):
+def analysis_loop(args, encoder=None):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
@@ -364,8 +362,8 @@ def analysis_loop(args):
 
     load_file = args.load_file
     if load_file == "recent":
-        load_file = most_recent_file(args.path_dir)
-    branch.load_state_dict(torch.load(load_file))
+        load_file = most_recent_file(args.path_dir, ext=".pth")
+    branch.load_state_dict(torch.load(load_file)["state_dict"])
     branch.eval()
     b = branch.encoder
     print("Completed model loading")
@@ -378,12 +376,20 @@ def analysis_loop(args):
         **dataloader_kwargs
     ) # check if the data is actually different?
     print("Completed data loading")
-
-    coded = np.array((test_size))
-    energies = np.array((test_size))
-    for it, (x1, x2, energy) in enumerate(train_loader):
-        coded[it] = b(x1)
-        energies[it] = energy
+    
+    idx = 0
+    coded = []
+    energies = []
+    for it, (x1, x2, energy) in enumerate(test_loader):
+        energies.append(energy.numpy())
+        coded.append(b(x1).detach().numpy())
+        idx = idx + 1
+    coded = np.array(coded)
+    energies = np.array(energies)
+   
+    os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
+    np.save(os.path.join(args.path_dir, "testing/coded.npy"), coded)
+    np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
 
     return coded, energies
 
@@ -415,9 +421,9 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_epochs', default=5, type=int)
     parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis'])
-    parser.add_argument('--path_dir', default='../output/pendulum', type=str)
+    parser.add_argument('--path_dir', default='output/pendulum', type=str)
     parser.add_argument('--load_file', default='recent', type=str)
-    parser.add_argument('--test_size', default=1000, type=int)
+    parser.add_argument('--test_size', default=1024, type=int)
 
     args = parser.parse_args()
     main(args)
