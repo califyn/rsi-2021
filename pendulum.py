@@ -1,6 +1,8 @@
 # preamble
 # make sure all of the packages are installed in your conda environment, so that you don't get import errors
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+
 import numpy as np
 import torch
 import argparse
@@ -24,6 +26,19 @@ def set_deterministic(seed):
         torch.cuda.manual_seed(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+def most_recent_file(folder):
+    max_time = 0
+    max_file = ""
+    for dirname, subdirs, files in os.walk(folder):
+        for fname in files:
+            full_path = os.path.join(dirname, fname)
+            time = os.stat(full_path).st_mtime
+            if time > max_time:
+                max_time = time
+                max_file = full_path
+
+    return max_file
 
 # optimization
 class LRScheduler(object):
@@ -204,7 +219,7 @@ class Branch(nn.Module):
                 nn.Linear(64, 64),
                 nn.BatchNorm1d(64),
                 nn.ReLU(inplace=True),
-                nn.Linear(64, 3)
+                nn.Linear(64, 1)
             )  # simple encoder to start with
             # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
             # TODO: replace the encoder with CNN once we have 2D dataset
@@ -234,7 +249,7 @@ def plotting_loop(args):
 
 def training_loop(args, encoder=None):
     # dataset
-    dataloader_kwargs = dict(drop_last=True, pin_memory=True, num_workers=1)
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
         dataset=PendulumDataset(),
         shuffle=True,
@@ -343,6 +358,27 @@ def training_loop(args, encoder=None):
 
 def analysis_loop(args):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
+    dim_proj = [int(x) for x in args.dim_proj.split(',')]
+    branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    if args.dim_pred:
+        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+
+    load_file = args.load_file
+    if load_file == "recent":
+        load_file = most_recent_file(args.path_dir)
+    branch.load_state_dict(torch.load(load_file))
+    branch.eval()
+
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
+    test_loader = torch.utils.data.DataLoader(
+        dataset=PendulumDataset(),
+        shuffle=True,
+        batch_size=args.bsz,
+        **dataloader_kwargs
+    ) # check if the data is actually different?
+    print("Completed data loading")
+    test_data = 
+
     pass
 
 
@@ -374,6 +410,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis'])
     parser.add_argument('--path_dir', default='../output/pendulum', type=str)
+    parser.add_argument('--load_file', default='recent', type=str)
 
     args = parser.parse_args()
     main(args)
