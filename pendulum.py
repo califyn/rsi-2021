@@ -117,7 +117,7 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
     """
     # setting up random seeds
     rng = np.random.default_rng()
-    
+
     t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
     k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
@@ -317,8 +317,6 @@ def training_loop(args, encoder=None):
 
     # training
     for e in range(1, args.epochs + 1):
-        print(str(e))
-        print(str(args.epochs + 1))
         # declaring train
         main_branch.train()
         if args.dim_pred:
@@ -360,6 +358,7 @@ def analysis_loop(args):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
@@ -368,18 +367,25 @@ def analysis_loop(args):
         load_file = most_recent_file(args.path_dir)
     branch.load_state_dict(torch.load(load_file))
     branch.eval()
+    b = branch.encoder
+    print("Completed model loading")
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumDataset(),
+        dataset=PendulumDataset(size=args.test_size),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
     ) # check if the data is actually different?
     print("Completed data loading")
-    test_data = 
 
-    pass
+    coded = np.array((test_size))
+    energies = np.array((test_size))
+    for it, (x1, x2, energy) in enumerate(train_loader):
+        coded[it] = b(x1)
+        energies[it] = energy
+
+    return coded, energies
 
 
 def main(args):
@@ -411,6 +417,7 @@ if __name__ == '__main__':
                         choices=['plotting', 'training', 'analysis'])
     parser.add_argument('--path_dir', default='../output/pendulum', type=str)
     parser.add_argument('--load_file', default='recent', type=str)
+    parser.add_argument('--test_size', default=1000, type=int)
 
     args = parser.parse_args()
     main(args)

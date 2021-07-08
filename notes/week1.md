@@ -16,6 +16,8 @@ video: audio visual instance discrimination with cross modal agreement (video pa
 
 http://www.incompleteideas.net/IncIdeas/BitterLesson.html
 
+https://paperswithcode.com/paper/softmax-splatting-for-video-frame
+
 machine teaching?
 
 questions:
