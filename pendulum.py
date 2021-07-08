@@ -17,7 +17,7 @@ from scipy.special import ellipj
 def set_deterministic(seed):
     # seed by default is None
     if seed is not None:
-        print(f"Deterministic with seed = {seed}")
+        print("Deterministic with seed = " + str(seed))
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -25,16 +25,13 @@ def set_deterministic(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-
-# setting up random seeds
-rng = np.random.default_rng()
-set_deterministic(42)
-
-
 # optimization
 class LRScheduler(object):
     """
     Learning rate scheduler for the optimizer.
+
+    Warmup increases to base linearly, while base decays to final using cosine
+    (quick immediate dropoff that smoothly decreases.)
     """
 
     def __init__(self, optimizer, warmup_epochs, warmup_lr, num_epochs, base_lr, final_lr, iter_per_epoch,
@@ -67,13 +64,15 @@ class LRScheduler(object):
 # loss functions for contrastive learning
 def negative_cosine_similarity(p, z):
     """
-    Negative cosine similarity.
+    Negative cosine similarity. (Cosine similarity is the cosine of the angle
+    between two vectors of arbitrary length.)
+
     Contrastive learning loss with only *positive* terms.
     :param p: the first vector. p stands for prediction, as in BYOL and SimSiam
     :param z: the second vector. z stands for representation
     :return: -cosine_similarity(p, z)
     """
-    return - F.cosine_similarity(p, z.detach(), dim=-1).mean()
+    return - F.cosine_similarity(p, z.detach(), dim=-1).mean() # detach removes gradient tracking
 
 
 def info_nce(z1, z2, temperature=0.1):
@@ -101,6 +100,9 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
     pendulum dataset generation
     provided by Peter: ask him for issues with the dataset generation
     """
+    # setting up random seeds
+    rng = np.random.default_rng()
+    
     t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
     k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
@@ -232,13 +234,14 @@ def plotting_loop(args):
 
 def training_loop(args, encoder=None):
     # dataset
-    dataloader_kwargs = dict(drop_last=True, pin_memory=True, num_workers=4)
+    dataloader_kwargs = dict(drop_last=True, pin_memory=True, num_workers=1)
     train_loader = torch.utils.data.DataLoader(
         dataset=PendulumDataset(),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
-    )
+    ) # check if the data is actually different?
+    print("Completed data loading")
 
     # model
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
@@ -289,6 +292,7 @@ def training_loop(args, encoder=None):
             p2 = h(z2)
             loss = negative_cosine_similarity(p1, z2) / 2 + negative_cosine_similarity(p2, z1) / 2
         return loss
+    print("Setup complete")
 
     # logging
     start = time.time()
@@ -298,13 +302,17 @@ def training_loop(args, encoder=None):
 
     # training
     for e in range(1, args.epochs + 1):
+        print(str(e))
+        print(str(args.epochs + 1))
         # declaring train
         main_branch.train()
         if args.dim_pred:
             h.train()
+        print("train")
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
+            print("data")
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
@@ -339,6 +347,7 @@ def analysis_loop(args):
 
 
 def main(args):
+    set_deterministic(42)
     if args.mode == 'training':
         training_loop(args)
     elif args.mode == 'analysis':
