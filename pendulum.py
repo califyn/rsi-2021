@@ -27,14 +27,14 @@ def set_deterministic(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def most_recent_file(folder):
+def most_recent_file(folder, ext=""):
     max_time = 0
     max_file = ""
     for dirname, subdirs, files in os.walk(folder):
         for fname in files:
             full_path = os.path.join(dirname, fname)
             time = os.stat(full_path).st_mtime
-            if time > max_time:
+            if time > max_time and full_path.endswith(ext):
                 max_time = time
                 max_file = full_path
 
@@ -246,7 +246,7 @@ def plotting_loop(args):
     plt.ylabel(r"angular momentum $L$")
     plt.savefig(os.path.join(args.path_dir, 'dataset.png'), dpi=300)
 
-def supervised_loop(args):
+def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
         dataset=PendulumDataset(),
@@ -301,6 +301,7 @@ def supervised_loop(args):
     file_to_update = open(os.path.join(args.path_dir, 'training_loss.log'), 'w')
     torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
 
+    loss = torch.nn.MSELoss()
     for e in range(1, args.epochs + 1):
         # declaring train
         b.train()
@@ -311,24 +312,24 @@ def supervised_loop(args):
             b.zero_grad()
 
             # forward pass
-            loss = torch.nn.MSELoss(b(x1), energy)
+            out_loss = loss(b(x1), energy.float())
 
             # optimization step
-            loss.backward()
+            out_loss.backward()
             optimizer.step()
             lr_scheduler.step()
             if args.dim_pred:
                 pred_optimizer.step()
-
+        print(str(e))
         if e % args.save_every == 0:
-            torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
-            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
             file_to_update.write(line_to_print + '\n')
             file_to_update.flush()
             print(line_to_print)
 
-        file_to_update.close()
-        return b
+    file_to_update.close()
+    return b
 
 
 def training_loop(args, encoder=None):
@@ -405,11 +406,9 @@ def training_loop(args, encoder=None):
         main_branch.train()
         if args.dim_pred:
             h.train()
-        print("train")
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
-            print("data")
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
@@ -438,7 +437,7 @@ def training_loop(args, encoder=None):
     return main_branch.encoder
 
 
-def analysis_loop(args):
+def analysis_loop(args, encoder=None):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
@@ -447,8 +446,10 @@ def analysis_loop(args):
 
     load_file = args.load_file
     if load_file == "recent":
-        load_file = most_recent_file(args.path_dir)
-    branch.load_state_dict(torch.load(load_file))
+        load_file = most_recent_file(args.path_dir, ext=".pth")
+    load_file = os.path.join(args.path_dir, load_file)
+    branch.load_state_dict(torch.load(load_file)["state_dict"])
+
     branch.eval()
     b = branch.encoder
     print("Completed model loading")
@@ -462,11 +463,18 @@ def analysis_loop(args):
     ) # check if the data is actually different?
     print("Completed data loading")
 
-    coded = np.array((test_size))
-    energies = np.array((test_size))
-    for it, (x1, x2, energy) in enumerate(train_loader):
-        coded[it] = b(x1)
-        energies[it] = energy
+    coded = []
+    energies = []
+    for it, (x1, x2, energy) in enumerate(test_loader):
+        coded.append(b(x1).detach().numpy())
+        energies.append(energy.detach().numpy())
+
+    coded = np.array(coded)
+    energies = np.array(energies)
+    
+    os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
+    np.save(os.path.join(args.path_dir, "testing/coded.npy"), coded)
+    np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
 
     return coded, energies
 
