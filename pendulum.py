@@ -27,14 +27,14 @@ def set_deterministic(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def most_recent_file(folder, ext=""):
+def most_recent_file(folder):
     max_time = 0
     max_file = ""
     for dirname, subdirs, files in os.walk(folder):
         for fname in files:
             full_path = os.path.join(dirname, fname)
             time = os.stat(full_path).st_mtime
-            if time > max_time and full_path.endswith(ext):
+            if time > max_time:
                 max_time = time
                 max_file = full_path
 
@@ -246,6 +246,90 @@ def plotting_loop(args):
     plt.ylabel(r"angular momentum $L$")
     plt.savefig(os.path.join(args.path_dir, 'dataset.png'), dpi=300)
 
+def supervised_loop(args):
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
+    train_loader = torch.utils.data.DataLoader(
+        dataset=PendulumDataset(),
+        shuffle=True,
+        batch_size=args.bsz,
+        **dataloader_kwargs
+    ) # check if the data is actually different?
+    print("Completed data loading")
+
+    # model
+    dim_proj = [int(x) for x in args.dim_proj.split(',')]
+    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    if args.dim_pred:
+        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+
+    # optimization
+    dim_proj = [int(x) for x in args.dim_proj.split(',')]
+    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    if args.dim_pred:
+        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+
+    # optimization
+    optimizer = torch.optim.SGD(
+        main_branch.parameters(),
+        momentum=0.9,
+        lr=args.lr,
+        weight_decay=args.wd
+    )
+    lr_scheduler = LRScheduler(
+        optimizer=optimizer,
+        warmup_epochs=args.warmup_epochs,
+        warmup_lr=0,
+        num_epochs=args.epochs,
+        base_lr=args.lr * args.bsz / 256,
+        final_lr=0,
+        iter_per_epoch=len(train_loader),
+        constant_predictor_lr=True
+    )
+    if args.dim_pred:
+        pred_optimizer = torch.optim.SGD(
+            h.parameters(),
+            momentum=0.9,
+            lr=args.lr,
+            weight_decay=args.wd
+        )
+
+    # macros
+    b = main_branch.encoder
+
+    start = time.time()
+    os.makedirs(args.path_dir, exist_ok=True)
+    file_to_update = open(os.path.join(args.path_dir, 'training_loss.log'), 'w')
+    torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
+
+    for e in range(1, args.epochs + 1):
+        # declaring train
+        b.train()
+
+        # epoch
+        for it, (x1, x2, energy) in enumerate(train_loader):
+            # zero grad
+            b.zero_grad()
+
+            # forward pass
+            loss = torch.nn.MSELoss(b(x1), energy)
+
+            # optimization step
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            if args.dim_pred:
+                pred_optimizer.step()
+
+        if e % args.save_every == 0:
+            torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+            file_to_update.write(line_to_print + '\n')
+            file_to_update.flush()
+            print(line_to_print)
+
+        file_to_update.close()
+        return b
+
 
 def training_loop(args, encoder=None):
     # dataset
@@ -321,9 +405,11 @@ def training_loop(args, encoder=None):
         main_branch.train()
         if args.dim_pred:
             h.train()
+        print("train")
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
+            print("data")
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
@@ -352,18 +438,17 @@ def training_loop(args, encoder=None):
     return main_branch.encoder
 
 
-def analysis_loop(args, encoder=None):
+def analysis_loop(args):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
-
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
     load_file = args.load_file
     if load_file == "recent":
-        load_file = most_recent_file(args.path_dir, ext=".pth")
-    branch.load_state_dict(torch.load(load_file)["state_dict"])
+        load_file = most_recent_file(args.path_dir)
+    branch.load_state_dict(torch.load(load_file))
     branch.eval()
     b = branch.encoder
     print("Completed model loading")
@@ -376,20 +461,12 @@ def analysis_loop(args, encoder=None):
         **dataloader_kwargs
     ) # check if the data is actually different?
     print("Completed data loading")
-    
-    idx = 0
-    coded = []
-    energies = []
-    for it, (x1, x2, energy) in enumerate(test_loader):
-        energies.append(energy.numpy())
-        coded.append(b(x1).detach().numpy())
-        idx = idx + 1
-    coded = np.array(coded)
-    energies = np.array(energies)
-   
-    os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
-    np.save(os.path.join(args.path_dir, "testing/coded.npy"), coded)
-    np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
+
+    coded = np.array((test_size))
+    energies = np.array((test_size))
+    for it, (x1, x2, energy) in enumerate(train_loader):
+        coded[it] = b(x1)
+        energies[it] = energy
 
     return coded, energies
 
@@ -402,6 +479,8 @@ def main(args):
         analysis_loop(args)
     elif args.mode == 'plotting':
         plotting_loop(args)
+    elif args.mode == 'supervised':
+        supervised_loop(args)
     else:
         raise
 
@@ -420,10 +499,10 @@ if __name__ == '__main__':
     parser.add_argument('--save_every', default=100, type=int)
     parser.add_argument('--warmup_epochs', default=5, type=int)
     parser.add_argument('--mode', default='training', type=str,
-                        choices=['plotting', 'training', 'analysis'])
-    parser.add_argument('--path_dir', default='output/pendulum', type=str)
+                        choices=['plotting', 'training', 'analysis', 'supervised'])
+    parser.add_argument('--path_dir', default='../output/pendulum', type=str)
     parser.add_argument('--load_file', default='recent', type=str)
-    parser.add_argument('--test_size', default=1024, type=int)
+    parser.add_argument('--test_size', default=1000, type=int)
 
     args = parser.parse_args()
     main(args)

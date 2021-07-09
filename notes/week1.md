@@ -18,8 +18,22 @@ http://www.incompleteideas.net/IncIdeas/BitterLesson.html
 
 https://paperswithcode.com/paper/softmax-splatting-for-video-frame
 
+neural arithmetic logic unit https://arxiv.org/pdf/1808.00508.pdf
+
 machine teaching?
 
 questions:
 -why 3 instead of 1 as in [learning conserved quantities using siamese](https://journals.aps.org/prresearch/pdf/10.1103/PhysRevResearch.2.033499 )
 -what's a projector
+
+what is temperature
+
+read about cross entropy
+
+supervised version
+
+trajectory length adjustment
+
+any 2 points
+
+noise
