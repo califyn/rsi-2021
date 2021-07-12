@@ -37,3 +37,36 @@ trajectory length adjustment
 any 2 points
 
 noise
+
+supervised works.
+![](../data/coded_vs_energies.png)
+(energy vs output)
+
+i think its happening because of collapse
+![](../data/over-time.png)
+
+x=energies y=outputs red -> green = through training time
+
+it wasn't really COLLAPSING what was happening was that infonce had
+first line which was normalizing and thus all the 1D vectors got mapped to
+{1, -1} -_-
+
+made normalizing only do for vectors of length >1
+
+getting nan issues.  setting weight decay to 0.01? (instead of 0.001?) maybe this will help
+
+ok jk we just made it 2d and it works so wonderfully
+![](data/coded_vs_energies_2d.png)
+color = energy
+![](coded_vs_energies_2dangle.png)
+also its linear in terms of angle ? interesting
+
+also it reproduces really well for whatever reason?????
+
+generalization ability?
+
+linear projector?
+
+infonce uses more negative samples than the simclr loss
+
+https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.126.1806043

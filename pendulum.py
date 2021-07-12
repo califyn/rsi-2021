@@ -108,6 +108,16 @@ def info_nce(z1, z2, temperature=0.1):
     loss = torch.nn.functional.cross_entropy(logits, labels)
     return loss
 
+def simclr_loss(z1, z2, temperature=0.1):
+    """
+    Implementing loss from SimCLR.
+    :param z1: first vector
+    :param z2: second vector
+    :param temperature: how sharp the prediction task is
+    :return: simclr_loss(z1, z2)
+    """
+    
+
 
 # dataset
 def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, check_energy=False, k2=None):
@@ -301,6 +311,8 @@ def supervised_loop(args):
     file_to_update = open(os.path.join(args.path_dir, 'training_loss.log'), 'w')
     torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
 
+    loss = torch.nn.MSELoss()
+
     for e in range(1, args.epochs + 1):
         # declaring train
         b.train()
@@ -311,10 +323,10 @@ def supervised_loop(args):
             b.zero_grad()
 
             # forward pass
-            loss = torch.nn.MSELoss(b(x1), energy)
+            loss_out = loss(b(x1), energy)
 
             # optimization step
-            loss.backward()
+            loss_out.backward()
             optimizer.step()
             lr_scheduler.step()
             if args.dim_pred:
