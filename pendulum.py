@@ -27,14 +27,14 @@ def set_deterministic(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def most_recent_file(folder):
+def most_recent_file(folder, ext=""):
     max_time = 0
     max_file = ""
     for dirname, subdirs, files in os.walk(folder):
         for fname in files:
             full_path = os.path.join(dirname, fname)
             time = os.stat(full_path).st_mtime
-            if time > max_time:
+            if time > max_time and full_path.endswith(ext):
                 max_time = time
                 max_file = full_path
 
@@ -99,9 +99,10 @@ def info_nce(z1, z2, temperature=0.1):
     :param temperature: how sharp the prediction task is
     :return: infoNCE(z1, z2)
     """
-    z1 = torch.nn.functional.normalize(z1, dim=1)
-    z2 = torch.nn.functional.normalize(z2, dim=1)
+    if z1.size()[1] <= 1:
+        raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
     logits = z1 @ z2.T
+    logit_save = torch.clone(logits)
     logits /= temperature
     n = z1.shape[0]
     labels = torch.arange(0, n, dtype=torch.long)
@@ -229,7 +230,7 @@ class Branch(nn.Module):
                 nn.Linear(64, 64),
                 nn.BatchNorm1d(64),
                 nn.ReLU(inplace=True),
-                nn.Linear(64, 1)
+                nn.Linear(64, 3)
             )  # simple encoder to start with
             # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
             # TODO: replace the encoder with CNN once we have 2D dataset
@@ -256,7 +257,7 @@ def plotting_loop(args):
     plt.ylabel(r"angular momentum $L$")
     plt.savefig(os.path.join(args.path_dir, 'dataset.png'), dpi=300)
 
-def supervised_loop(args):
+def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
         dataset=PendulumDataset(),
@@ -312,7 +313,6 @@ def supervised_loop(args):
     torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
 
     loss = torch.nn.MSELoss()
-
     for e in range(1, args.epochs + 1):
         # declaring train
         b.train()
@@ -323,24 +323,26 @@ def supervised_loop(args):
             b.zero_grad()
 
             # forward pass
-            loss_out = loss(b(x1), energy)
+            out_loss = loss(b(x1), energy.float())
 
             # optimization step
-            loss_out.backward()
+            out_loss.backward()
             optimizer.step()
             lr_scheduler.step()
             if args.dim_pred:
                 pred_optimizer.step()
-
         if e % args.save_every == 0:
-            torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
-            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
             file_to_update.write(line_to_print + '\n')
             file_to_update.flush()
             print(line_to_print)
+        if e % args.progress_every == 0:
+            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+            print(line_to_print)
 
-        file_to_update.close()
-        return b
+    file_to_update.close()
+    return b
 
 
 def training_loop(args, encoder=None):
@@ -417,11 +419,9 @@ def training_loop(args, encoder=None):
         main_branch.train()
         if args.dim_pred:
             h.train()
-        print("train")
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
-            print("data")
             # zero grad
             main_branch.zero_grad()
             if args.dim_pred:
@@ -445,24 +445,47 @@ def training_loop(args, encoder=None):
             file_to_update.write(line_to_print + '\n')
             file_to_update.flush()
             print(line_to_print)
+        if e % args.progress_every == 0:
+            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+            print(line_to_print)
+
 
     file_to_update.close()
     return main_branch.encoder
 
 
-def analysis_loop(args):
+def analysis_loop(args, encoder=None):
     # TODO: can be used to study if the neural network has learned the conserved quantity.
-    dim_proj = [int(x) for x in args.dim_proj.split(',')]
-    branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
-    if args.dim_pred:
-        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+    load_files = args.load_file
+    if args.load_every != -1:
+        load_files = []
+        idx = 0
+        while 1 + 1 == 2:
+            file_to_add = os.path.join(args.path_dir, str(idx * args.load_every) + ".pth")
+            if os.path.isfile(file_to_add):
+                load_files.append(file_to_add)
+                idx = idx + 1
+            else:
+                break
+    elif load_files == "recent":
+        load_files = [most_recent_file(args.path_dir, ext=".pth")]
+    else:
+        load_files = os.path.join(args.path_dir, load_files)
+        load_files = [load_files]
 
-    load_file = args.load_file
-    if load_file == "recent":
-        load_file = most_recent_file(args.path_dir)
-    branch.load_state_dict(torch.load(load_file))
-    branch.eval()
-    b = branch.encoder
+    b = []
+
+    for load_file in load_files:
+        dim_proj = [int(x) for x in args.dim_proj.split(',')]
+        branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+        if args.dim_pred:
+            h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+
+        branch.load_state_dict(torch.load(load_file)["state_dict"])
+
+        branch.eval()
+        b.append(branch.encoder)
+
     print("Completed model loading")
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
@@ -474,11 +497,25 @@ def analysis_loop(args):
     ) # check if the data is actually different?
     print("Completed data loading")
 
-    coded = np.array((test_size))
-    energies = np.array((test_size))
-    for it, (x1, x2, energy) in enumerate(train_loader):
-        coded[it] = b(x1)
-        energies[it] = energy
+    coded = []
+    energies = []
+
+    for i in range(len(b)):
+        coded.append([])
+
+    for it, (x1, x2, energy) in enumerate(test_loader):
+        for i in range(len(b)):
+            coded[i].append(b[i](x1).detach().numpy())
+        energies.append(energy.detach().numpy())
+
+    coded = np.array(coded)
+    energies = np.array(energies)
+
+    os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
+    for idx, load_file in enumerate(load_files):
+        save_file = "-" + load_file.rpartition("/")[2].rpartition(".")[0]
+        np.save(os.path.join(args.path_dir, "testing/coded" + save_file + ".npy"), coded[idx])
+    np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
 
     return coded, energies
 
@@ -515,6 +552,8 @@ if __name__ == '__main__':
     parser.add_argument('--path_dir', default='../output/pendulum', type=str)
     parser.add_argument('--load_file', default='recent', type=str)
     parser.add_argument('--test_size', default=1000, type=int)
+    parser.add_argument('--load_every', default='-1', type=int)
+    parser.add_argument('--progress_every', default=5, type=int)
 
     args = parser.parse_args()
     main(args)
