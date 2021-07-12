@@ -116,7 +116,7 @@ def simclr_loss(z1, z2, temperature=0.1):
     :param temperature: how sharp the prediction task is
     :return: simclr_loss(z1, z2)
     """
-    
+
 
 
 # dataset
