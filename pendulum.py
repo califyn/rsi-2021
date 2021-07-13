@@ -304,10 +304,12 @@ class PredictionMLP(nn.Module):
 
 
 class Branch(nn.Module):
-    def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None):
+    def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None, resnet=True):
         super().__init__()
         if encoder:
             self.encoder = encoder
+        else if resnet:
+            self.encoder = torchvision.models.resnet(pretrained=False)
         else:
             self.encoder = nn.Sequential(
                 nn.Linear(2, 64),
@@ -328,7 +330,12 @@ class Branch(nn.Module):
             # TODO: replace the encoder with CNN once we have 2D dataset
             # self.encoder.fc = nn.Identity()  # replace the classification head with identity
         # self.projector = ProjectionMLP(32, 64, 32, affine=affine, deeper=deeper)
-        self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
+        if resnet:
+            self.projector = nn.Sequential(
+                nn.Linear(512, 2)
+            )
+        else:
+            self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
         self.net = nn.Sequential(
             self.encoder,
             self.projector
