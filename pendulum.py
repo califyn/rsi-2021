@@ -2,8 +2,8 @@
 # make sure all of the packages are installed in your conda environment, so that you don't get import errors
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-
 import numpy as np
+# import cupy as cp
 import torch
 import argparse
 import time
@@ -17,6 +17,7 @@ from scipy.special import ellipj
 
 from PIL import Image
 
+torch.backends.cudnn.benchmark = True
 
 def set_deterministic(seed):
     # seed by default is None
@@ -123,9 +124,9 @@ def simclr_loss(z1, z2, temperature=0.1):
 
 
 # dataset
-def pendulum_train_gen(batch_size, traj_samples=100, noise=0.,
+def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         shuffle=True, check_energy=False, k2=None, image=True,
-        blur=False, img_size=96, diff_time=0.2, bob_size=1, continuous=False):
+        blur=False, img_size=64, diff_time=0.5, bob_size=1, continuous=False):
     """
     pendulum dataset generation
     provided by Peter: ask him for issues with the dataset generation
@@ -171,9 +172,10 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0.,
 
         sn, cn, dn, _ = ellipj(t, k2)
         q = 2 * np.arcsin(np.sqrt(k2) * sn)
+        print("finished numerical generation")
 
         if shuffle:
-            for x in data:
+            for x in q:
                 rng.shuffle(x, axis=0) # TODO: check if the shapes work out
 
         if noise > 0:
@@ -181,21 +183,23 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0.,
 
         # Image generation begins here
         pxls = np.ones((batch_size, traj_samples, img_size, img_size, 3))
+        print("finished pxls")
         x = center_x + np.round(np.cos(q) * str_len)
         y = center_y + np.round(np.sin(q) * str_len)
-        print(np.shape(x))
+        #print(np.shape(x))
+        print("finished x and y generation")
         idx = np.indices((batch_size, traj_samples))
         bob_idx = np.indices((2 * bob_size + 1, 2 * bob_size + 1)) - bob_size
 
         pos = np.expand_dims(np.stack((x, y), axis=0), [0, 1])
         bob_idx = np.swapaxes(bob_idx, 0, 2)
         bob_idx = np.expand_dims(bob_idx, [3, 4, 5])
-        print(np.shape(pos))
-        print(np.shape(bob_idx))
+        #print(np.shape(pos))
+        #print(np.shape(bob_idx))
         #1 1 2 b t 2
         #5 5 2 1 1 1
         pos = pos + bob_idx
-        print(np.shape(pos))
+        #print(np.shape(pos))
         pos = np.reshape(pos, (bob_area, 2, batch_size, traj_samples, 2))
         pos = np.expand_dims(pos, 0)
         #(1, 25, 2, b, t, 2)
@@ -210,24 +214,27 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0.,
         idx = np.swapaxes(idx, 0, 2)
         idx = np.reshape(idx, (5, 4 * batch_size * traj_samples * bob_area))
         idx = idx.astype('int32')
-        print(np.shape(pxls))
-        print(q)
-        input(idx)
+        #print(np.shape(pxls))
+        #print(q)
+        #input(idx)
         #(2, 25, 5, b, t, 2)
+        print("finished index generation")
 
         pxls[idx[0], idx[1], idx[2], idx[3], idx[4]] = 0
         pxls = pxls.astype(np.uint8)
-        pxls = pxls * 255
+        #pxls = pxls * 255
         #input(pxls)
+        print("completed image generation")
 
-        for i in range(0, batch_size):
+        """for i in range(0, batch_size):
             for j in range(0, traj_samples):
                 img = pxls[i, j, :, :, :]
                 img = Image.fromarray(img, 'RGB')
                 img.show()
-                input("continue...")
+                input("continue...")"""
 
-        return k2, pxls
+        pxls = np.swapaxes(pxls, 4, 2)
+        return np.reshape(k2, (batch_size, 1)), pxls
 
 
 class PendulumNumericalDataset(torch.utils.data.Dataset):
@@ -249,7 +256,7 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
         return self.size
 
 class PendulumImageDataset(torch.utils.data.Dataset):
-    def __init__(self, size=10240, trajectory_length=100, noise=0.00):
+    def __init__(self, size=5120, trajectory_length=50, noise=0.00):
         self.size = size
         self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length)
         self.trajectory_length = trajectory_length
@@ -308,8 +315,12 @@ class Branch(nn.Module):
         super().__init__()
         if encoder:
             self.encoder = encoder
-        else if resnet:
-            self.encoder = torchvision.models.resnet(pretrained=False)
+        elif resnet:
+            self.encoder = torchvision.models.resnet18(pretrained=False)
+            self.encoder.fc = nn.Sequential(
+                nn.Linear(512, 1),
+                nn.Sigmoid()
+            )
         else:
             self.encoder = nn.Sequential(
                 nn.Linear(2, 64),
@@ -331,9 +342,7 @@ class Branch(nn.Module):
             # self.encoder.fc = nn.Identity()  # replace the classification head with identity
         # self.projector = ProjectionMLP(32, 64, 32, affine=affine, deeper=deeper)
         if resnet:
-            self.projector = nn.Sequential(
-                nn.Linear(512, 2)
-            )
+            self.projector = nn.Identity()
         else:
             self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
         self.net = nn.Sequential(
@@ -359,16 +368,23 @@ def plotting_loop(args):
 def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(trajectory_length=args.traj_len),
+        dataset=PendulumImageDataset(),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
     ) # check if the data is actually different?
+    test_loader = torch.utils.data.DataLoader(
+        dataset=PendulumImageDataset(size=512),
+        shuffle=False,
+        batch_size=512,
+        **dataloader_kwargs
+    )
     print("Completed data loading")
 
     # model
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    main_branch.cuda()
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
@@ -422,11 +438,14 @@ def supervised_loop(args, encoder=None):
             b.zero_grad()
 
             # forward pass
-            out_loss = loss(b(x1), energy.float())
+            out = b(x1)
+            out_loss = loss(out, energy.float())
 
             # optimization step
             out_loss.backward()
+            torch.nn.utils.clip_grad_norm_(b.parameters(), 3)
             optimizer.step()
+
             lr_scheduler.step()
             if args.dim_pred:
                 pred_optimizer.step()
@@ -437,7 +456,13 @@ def supervised_loop(args, encoder=None):
             file_to_update.flush()
             print(line_to_print)
         if e % args.progress_every == 0:
-            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+            b.eval()
+            val_loss = -1
+            for it, (x1, x2, energy) in enumerate(train_loader):
+                val_loss = loss(b(x1), energy.float())
+                break
+            variance = np.std(out.detach().numpy())
+            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | variance: {variance}| val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
             print(line_to_print)
 
     file_to_update.close()
@@ -448,7 +473,7 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(trajectory_length=args.traj_len),
+        dataset=PendulumImageDataset(),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
