@@ -15,6 +15,8 @@ import random
 import matplotlib.pyplot as plt
 from scipy.special import ellipj
 
+from PIL import Image
+
 
 def set_deterministic(seed):
     # seed by default is None
@@ -121,7 +123,9 @@ def simclr_loss(z1, z2, temperature=0.1):
 
 
 # dataset
-def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, check_energy=False, k2=None):
+def pendulum_train_gen(batch_size, traj_samples=100, noise=0.,
+        shuffle=True, check_energy=False, k2=None, image=True,
+        blur=False, img_size=96, diff_time=0.2, bob_size=1, continuous=False):
     """
     pendulum dataset generation
     provided by Peter: ask him for issues with the dataset generation
@@ -129,36 +133,107 @@ def pendulum_train_gen(batch_size, traj_samples=100, noise=0., shuffle=True, che
     # setting up random seeds
     rng = np.random.default_rng()
 
-    t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
-    k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
+    if not image:
+        t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
+        k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
-    # finding what q (angle) and p (angular momentum) correspond to the time
-    # derivation is a bit involved and optional to study
-    # if interested, see https://en.wikipedia.org/wiki/Pendulum_(mathematics)# at section (Arbitrary-amplitude period)
-    sn, cn, dn, _ = ellipj(t, k2)
-    q = 2 * np.arcsin(np.sqrt(k2) * sn)
-    p = 2 * np.sqrt(k2) * cn * dn / np.sqrt(1 - k2 * sn ** 2)
-    data = np.stack((q, p), axis=-1)
+        # finding what q (angle) and p (angular momentum) correspond to the time
+        # derivation is a bit involved and optional to study
+        # if interested, see https://en.wikipedia.org/wiki/Pendulum_(mathematics)# at section (Arbitrary-amplitude period)
+        sn, cn, dn, _ = ellipj(t, k2)
+        q = 2 * np.arcsin(np.sqrt(k2) * sn)
+        p = 2 * np.sqrt(k2) * cn * dn / np.sqrt(1 - k2 * sn ** 2)
+        data = np.stack((q, p), axis=-1)
 
-    if shuffle:
-        for x in data:
-            rng.shuffle(x, axis=0)
+        if shuffle:
+            for x in data:
+                rng.shuffle(x, axis=0)
 
-    if check_energy:
-        H = 0.5 * p ** 2 - np.cos(q) + 1
-        diffH = H - 2 * k2
-        print("max diffH = ", np.max(np.abs(diffH)))
-        assert np.allclose(diffH, np.zeros_like(diffH))
+        if check_energy:
+            H = 0.5 * p ** 2 - np.cos(q) + 1
+            diffH = H - 2 * k2
+            print("max diffH = ", np.max(np.abs(diffH)))
+            assert np.allclose(diffH, np.zeros_like(diffH))
 
-    if noise > 0:
-        data += noise * rng.standard_normal(size=data.shape)
-    return k2, data
+        if noise > 0:
+            data += noise * rng.standard_normal(size=data.shape)
+        return k2, data
+
+    elif image and not blur:
+        t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
+        t = np.stack((t, t + diff_time), axis=-1)
+        k2 = rng.uniform(size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
+
+        center_x = img_size // 2
+        center_y = img_size // 2
+        str_len = img_size - 2 - img_size // 2 - bob_size
+        bob_area = (2 * bob_size + 1)**2
+
+        sn, cn, dn, _ = ellipj(t, k2)
+        q = 2 * np.arcsin(np.sqrt(k2) * sn)
+
+        if shuffle:
+            for x in data:
+                rng.shuffle(x, axis=0) # TODO: check if the shapes work out
+
+        if noise > 0:
+            q += noise * rng.standard_normal(size=p.shape)
+
+        # Image generation begins here
+        pxls = np.ones((batch_size, traj_samples, img_size, img_size, 3))
+        x = center_x + np.round(np.cos(q) * str_len)
+        y = center_y + np.round(np.sin(q) * str_len)
+        print(np.shape(x))
+        idx = np.indices((batch_size, traj_samples))
+        bob_idx = np.indices((2 * bob_size + 1, 2 * bob_size + 1)) - bob_size
+
+        pos = np.expand_dims(np.stack((x, y), axis=0), [0, 1])
+        bob_idx = np.swapaxes(bob_idx, 0, 2)
+        bob_idx = np.expand_dims(bob_idx, [3, 4, 5])
+        print(np.shape(pos))
+        print(np.shape(bob_idx))
+        #1 1 2 b t 2
+        #5 5 2 1 1 1
+        pos = pos + bob_idx
+        print(np.shape(pos))
+        pos = np.reshape(pos, (bob_area, 2, batch_size, traj_samples, 2))
+        pos = np.expand_dims(pos, 0)
+        #(1, 25, 2, b, t, 2)
+        #(1, 1, 2, b, t, 1)
+        idx = np.expand_dims(idx, [0, 1, 5])
+        #(2, 1, 1, 1, 1, 2)
+        c = np.expand_dims(np.array([[1, 1], [0, 2]]), [1, 2, 3, 4])
+        idx, pos, c = np.broadcast_arrays(idx, pos, c)
+        c = np.expand_dims(c[:, :, 0, :, :, :], 2)
+        idx = np.concatenate((idx, pos, c), axis=2)
+
+        idx = np.swapaxes(idx, 0, 2)
+        idx = np.reshape(idx, (5, 4 * batch_size * traj_samples * bob_area))
+        idx = idx.astype('int32')
+        print(np.shape(pxls))
+        print(q)
+        input(idx)
+        #(2, 25, 5, b, t, 2)
+
+        pxls[idx[0], idx[1], idx[2], idx[3], idx[4]] = 0
+        pxls = pxls.astype(np.uint8)
+        pxls = pxls * 255
+        #input(pxls)
+
+        for i in range(0, batch_size):
+            for j in range(0, traj_samples):
+                img = pxls[i, j, :, :, :]
+                img = Image.fromarray(img, 'RGB')
+                img.show()
+                input("continue...")
+
+        return k2, pxls
 
 
-class PendulumDataset(torch.utils.data.Dataset):
+class PendulumNumericalDataset(torch.utils.data.Dataset):
     def __init__(self, size=10240, trajectory_length=100, noise=0.00):
         self.size = size
-        self.k2, self.data = pendulum_train_gen(size, noise=noise)
+        self.k2, self.data = pendulum_train_gen(size, noise=noise, image=False)
         self.trajectory_length = trajectory_length
 
     def __getitem__(self, idx):
@@ -173,6 +248,23 @@ class PendulumDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.size
 
+class PendulumImageDataset(torch.utils.data.Dataset):
+    def __init__(self, size=10240, trajectory_length=100, noise=0.00):
+        self.size = size
+        self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length)
+        self.trajectory_length = trajectory_length
+
+    def __getitem__(self, idx):
+        i = random.randint(0, self.trajectory_length - 1)
+        j = random.randint(0, self.trajectory_length - 1)
+        return [
+            torch.FloatTensor(self.data[idx][i]),
+            torch.FloatTensor(self.data[idx][j]),
+            self.k2[idx]
+        ]  # [first_view, second_view, energy]
+
+    def __len__(self):
+        return self.size
 
 # models
 class ProjectionMLP(nn.Module):
@@ -260,7 +352,7 @@ def plotting_loop(args):
 def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumDataset(),
+        dataset=PendulumImageDataset(trajectory_length=args.traj_len),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -349,7 +441,7 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumDataset(),
+        dataset=PendulumImageDataset(trajectory_length=args.traj_len),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -490,7 +582,7 @@ def analysis_loop(args, encoder=None):
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumDataset(size=args.test_size),
+        dataset=PendulumImageDataset(size=args.test_size),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -521,6 +613,7 @@ def analysis_loop(args, encoder=None):
 
 
 def main(args):
+
     set_deterministic(42)
     if args.mode == 'training':
         training_loop(args)
@@ -554,6 +647,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_size', default=1000, type=int)
     parser.add_argument('--load_every', default='-1', type=int)
     parser.add_argument('--progress_every', default=5, type=int)
+    parser.add_argument('--traj_len', default=100, type=int)
 
     args = parser.parse_args()
     main(args)
