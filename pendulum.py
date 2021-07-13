@@ -318,8 +318,7 @@ class Branch(nn.Module):
         elif resnet:
             self.encoder = torchvision.models.resnet18(pretrained=False)
             self.encoder.fc = nn.Sequential(
-                nn.Linear(512, 1),
-                nn.Sigmoid()
+                nn.Linear(512, 2)
             )
         else:
             self.encoder = nn.Sequential(
@@ -381,16 +380,10 @@ def supervised_loop(args, encoder=None):
     )
     print("Completed data loading")
 
-    # model
-    dim_proj = [int(x) for x in args.dim_proj.split(',')]
-    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
-    main_branch.cuda()
-    if args.dim_pred:
-        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
-
     # optimization
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    main_branch.cuda()
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
@@ -478,11 +471,18 @@ def training_loop(args, encoder=None):
         batch_size=args.bsz,
         **dataloader_kwargs
     ) # check if the data is actually different?
+    test_loader = torch.utils.data.DataLoader(
+        dataset=PendulumImageDataset(size=512),
+        shuffle=False,
+        batch_size=512,
+        **dataloader_kwargs
+    )
     print("Completed data loading")
 
     # model
     dim_proj = [int(x) for x in args.dim_proj.split(',')]
     main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+    main_branch.cuda()
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
