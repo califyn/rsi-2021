@@ -105,10 +105,10 @@ def info_nce(z1, z2, temperature=0.1):
     if z1.size()[1] <= 1:
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
     logits = z1 @ z2.T
-    logit_save = torch.clone(logits)
     logits /= temperature
     n = z1.shape[0]
-    labels = torch.arange(0, n, dtype=torch.long)
+    labels = torch.arange(0, n, dtype=torch.long).cuda()
+    logits = logits.cuda()
     loss = torch.nn.functional.cross_entropy(logits, labels)
     return loss
 
@@ -265,8 +265,8 @@ class PendulumImageDataset(torch.utils.data.Dataset):
         i = random.randint(0, self.trajectory_length - 1)
         j = random.randint(0, self.trajectory_length - 1)
         return [
-            torch.FloatTensor(self.data[idx][i]),
-            torch.FloatTensor(self.data[idx][j]),
+            torch.cuda.FloatTensor(self.data[idx][i]),
+            torch.cuda.FloatTensor(self.data[idx][j]),
             self.k2[idx]
         ]  # [first_view, second_view, energy]
 
@@ -464,7 +464,7 @@ def supervised_loop(args, encoder=None):
 
 def training_loop(args, encoder=None):
     # dataset
-    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
         dataset=PendulumImageDataset(),
         shuffle=True,
@@ -558,6 +558,7 @@ def training_loop(args, encoder=None):
 
             # optimization step
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(main_branch.parameters(), 3)
             optimizer.step()
             lr_scheduler.step()
             if args.dim_pred:
@@ -601,7 +602,7 @@ def analysis_loop(args, encoder=None):
 
     for load_file in load_files:
         dim_proj = [int(x) for x in args.dim_proj.split(',')]
-        branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
+        branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder).cuda()
         if args.dim_pred:
             h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
 
@@ -612,7 +613,7 @@ def analysis_loop(args, encoder=None):
 
     print("Completed model loading")
 
-    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     test_loader = torch.utils.data.DataLoader(
         dataset=PendulumImageDataset(size=args.test_size),
         shuffle=True,
@@ -629,8 +630,8 @@ def analysis_loop(args, encoder=None):
 
     for it, (x1, x2, energy) in enumerate(test_loader):
         for i in range(len(b)):
-            coded[i].append(b[i](x1).detach().numpy())
-        energies.append(energy.detach().numpy())
+            coded[i].append(b[i](x1).cpu().detach().numpy())
+        energies.append(energy.cpu().detach().numpy())
 
     coded = np.array(coded)
     energies = np.array(energies)
