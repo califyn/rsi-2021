@@ -1,7 +1,7 @@
 # preamble
 # make sure all of the packages are installed in your conda environment, so that you don't get import errors
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
 import numpy as np
 # import cupy as cp
 import torch
@@ -104,7 +104,8 @@ def info_nce(z1, z2, temperature=0.1):
     """
     if z1.size()[1] <= 1:
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
-    # normalize !
+    z1 = torch.nn.functional.normalize(z1, dim=1)
+    z2 = torch.nn.functional.normalize(z2, dim=1)
     logits = z1 @ z2.T
     logits = 2 * z1 @ z2.T - z1 @ z1.T - z2 @ z2.T # torch.cdist b'=1
     logits /= temperature
@@ -127,8 +128,8 @@ def simclr_loss(z1, z2, temperature=0.1):
 
 # dataset
 def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
-        shuffle=True, check_energy=False, k2=None, image=True,
-        blur=False, img_size=64, diff_time=0.5, bob_size=1, continuous=False):
+        shuffle=True, check_energy=False, k2=None, image=True, gaps=False,
+        blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False):
     """
     pendulum dataset generation
     provided by Peter: ask him for issues with the dataset generation
@@ -166,6 +167,11 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
         t = np.stack((t, t + diff_time), axis=-1)
         k2 = rng.uniform(size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
+        if gaps:
+            print("gaps")
+            for i in range(0, batch_size):
+                if np.floor(k2[i, 0, 0] * 7) % 2 == 1:
+                    k2[i, 0, 0] = k2[i, 0, 0] - 1/7
 
         center_x = img_size // 2
         center_y = img_size // 2
@@ -258,9 +264,9 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
         return self.size
 
 class PendulumImageDataset(torch.utils.data.Dataset):
-    def __init__(self, size=10, trajectory_length=50, noise=0.00):
+    def __init__(self, size=5120, trajectory_length=50, gaps=False, noise=0.00):
         self.size = size
-        self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length)
+        self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length, gaps=gaps)
         self.trajectory_length = trajectory_length
 
     def __getitem__(self, idx):
@@ -369,7 +375,7 @@ def plotting_loop(args):
 def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(),
+        dataset=PendulumImageDataset(size=args.train_size, gaps=args.gaps),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -387,7 +393,7 @@ def supervised_loop(args, encoder=None):
     main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
     main_branch.cuda()
     if args.dim_pred:
-        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0]).cuda()
 
     # optimization
     optimizer = torch.optim.SGD(
@@ -468,7 +474,7 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(),
+        dataset=PendulumImageDataset(size=args.train_size, gaps=args.gaps),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -487,6 +493,7 @@ def training_loop(args, encoder=None):
     main_branch.cuda()
     if args.dim_pred:
         h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+        h.cuda()
 
     # optimization
     optimizer = torch.optim.SGD(
@@ -509,7 +516,7 @@ def training_loop(args, encoder=None):
         pred_optimizer = torch.optim.SGD(
             h.parameters(),
             momentum=0.9,
-            lr=args.lr,
+            lr=args.pred_lr,
             weight_decay=args.wd
         )
 
@@ -525,7 +532,7 @@ def training_loop(args, encoder=None):
         if args.loss == 'square':
             loss = (z1 - z2).pow(2).sum()
         elif args.loss == 'infonce':
-            loss = 0.5 * info_nce(z1, z2) + 0.5 * info_nce(z2, z1)
+            loss = 0.5 * info_nce(z1, z2, temperature=args.temp) + 0.5 * info_nce(z2, z1, temperature=args.temp)
         elif args.loss == 'cosine_predictor':
             p1 = h(z1)
             p2 = h(z2)
@@ -617,7 +624,7 @@ def analysis_loop(args, encoder=None):
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=args.test_size),
+        dataset=PendulumImageDataset(size=args.test_size, gaps=args.gaps),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -683,6 +690,10 @@ if __name__ == '__main__':
     parser.add_argument('--load_every', default='-1', type=int)
     parser.add_argument('--progress_every', default=5, type=int)
     parser.add_argument('--traj_len', default=100, type=int)
+    parser.add_argument('--train_size', default=5120, type=int)
+    parser.add_argument('--temp', default=0.1, type=float)
+    parser.add_argument('--gaps', default=False, action='store_true')
+    parser.add_argument('--pred_lr', default=0.02, type=float)
 
     args = parser.parse_args()
     main(args)
