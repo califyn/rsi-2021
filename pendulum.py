@@ -1,23 +1,25 @@
-# preamble
-# make sure all of the packages are installed in your conda environment, so that you don't get import errors
+# python imports
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
-import numpy as np
-# import cupy as cp
-import torch
 import argparse
 import time
+import random
+from PIL import Image
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
+# sci suite
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import ellipj
+
+# torch
+import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as T
-import random
-import matplotlib.pyplot as plt
-from scipy.special import ellipj
 
-from PIL import Image
-
-torch.backends.cudnn.benchmark = True
+verbose = False
 
 def set_deterministic(seed):
     # seed by default is None
@@ -26,9 +28,10 @@ def set_deterministic(seed):
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
 def most_recent_file(folder, ext=""):
     max_time = 0
@@ -43,13 +46,11 @@ def most_recent_file(folder, ext=""):
 
     return max_file
 
-# optimization
 class LRScheduler(object):
     """
     Learning rate scheduler for the optimizer.
 
-    Warmup increases to base linearly, while base decays to final using cosine
-    (quick immediate dropoff that smoothly decreases.)
+    Warmup increases to base linearly, while base decays to final using cosine.
     """
 
     def __init__(self, optimizer, warmup_epochs, warmup_lr, num_epochs, base_lr, final_lr, iter_per_epoch,
@@ -78,8 +79,6 @@ class LRScheduler(object):
     def get_lr(self):
         return self.current_lr
 
-
-# loss functions for contrastive learning
 def negative_cosine_similarity(p, z):
     """
     Negative cosine similarity. (Cosine similarity is the cosine of the angle
@@ -90,10 +89,10 @@ def negative_cosine_similarity(p, z):
     :param z: the second vector. z stands for representation
     :return: -cosine_similarity(p, z)
     """
-    return - F.cosine_similarity(p, z.detach(), dim=-1).mean() # detach removes gradient tracking
+    return - F.cosine_similarity(p, z.detach(), dim=-1).mean()
 
 
-def info_nce(z1, z2, temperature=0.1):
+def info_nce(z1, z2, temperature=0.1, distance="cosine"):
     """
     Noise contrastive estimation loss.
     Contrastive learning loss with *both* positive and negative terms.
@@ -104,35 +103,45 @@ def info_nce(z1, z2, temperature=0.1):
     """
     if z1.size()[1] <= 1:
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
+
     z1 = torch.nn.functional.normalize(z1, dim=1)
     z2 = torch.nn.functional.normalize(z2, dim=1)
-    logits = z1 @ z2.T
-    logits = 2 * z1 @ z2.T - z1 @ z1.T - z2 @ z2.T # torch.cdist b'=1
+
+    if distance == "cosine":
+        logits = z1 @ z2.T
+    elif distance == "euclidean":
+        logits = 2 * z1 @ z2.T - z1 @ z1.T - z2 @ z2.T
     logits /= temperature
+    if torch.cuda.is_available():
+        logits = logits.cuda()
+
     n = z1.shape[0]
-    labels = torch.arange(0, n, dtype=torch.long).cuda()
-    logits = logits.cuda()
+    labels = torch.arange(0, n, dtype=torch.long)
+    if torch.cuda.is_available():
+        labels = labels.cuda()
+
     loss = torch.nn.functional.cross_entropy(logits, labels)
     return loss
 
-def simclr_loss(z1, z2, temperature=0.1):
-    """
-    Implementing loss from SimCLR.
-    :param z1: first vector
-    :param z2: second vector
-    :param temperature: how sharp the prediction task is
-    :return: simclr_loss(z1, z2)
-    """
-
-
-
-# dataset
 def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         shuffle=True, check_energy=False, k2=None, image=True, gaps=False,
         blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False):
     """
     pendulum dataset generation
-    provided by Peter: ask him for issues with the dataset generation
+    :param batch_size: number of pendulums
+    :param traj_samples: number of samples per pendulum
+    :param noise: Gaussian noise
+    :param shuffle: if shuffle data
+    :param check_energy: check the energy (numerical mode only)
+    :param k2: specify energy
+    :param image: use image/graphical mode
+    :param gaps: generate gaps in data to test zero-shot interpolation (graphical mode only)
+    :param blur: whether to use motion blur mode (otherwise, use two-frame mode) [not implemented]
+    :param img_size: size of (square) image (graphical mode only)
+    :param diff_time: time difference between two images (graphical mode only)
+    :param bob_size: bob = square of length bob_size * 2 + 1
+    :param continuous: whether to use continuous generation [not implemented]
+    :return: energy, data
     """
     # setting up random seeds
     rng = np.random.default_rng()
@@ -141,12 +150,9 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
         k2 = rng.uniform(size=(batch_size, 1)) if k2 is None else k2 * np.ones((batch_size, 1))  # energies (conserved)
 
-        # finding what q (angle) and p (angular momentum) correspond to the time
-        # derivation is a bit involved and optional to study
-        # if interested, see https://en.wikipedia.org/wiki/Pendulum_(mathematics)# at section (Arbitrary-amplitude period)
         sn, cn, dn, _ = ellipj(t, k2)
-        q = 2 * np.arcsin(np.sqrt(k2) * sn)
-        p = 2 * np.sqrt(k2) * cn * dn / np.sqrt(1 - k2 * sn ** 2)
+        q = 2 * np.arcsin(np.sqrt(k2) * sn) # angle
+        p = 2 * np.sqrt(k2) * cn * dn / np.sqrt(1 - k2 * sn ** 2) # anglular momentum
         data = np.stack((q, p), axis=-1)
 
         if shuffle:
@@ -161,14 +167,15 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
 
         if noise > 0:
             data += noise * rng.standard_normal(size=data.shape)
+
         return k2, data
 
     elif image and not blur:
         t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
-        t = np.stack((t, t + diff_time), axis=-1)
+        t = np.stack((t, t + diff_time), axis=-1) # time steps
+
         k2 = rng.uniform(size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
         if gaps:
-            print("gaps")
             for i in range(0, batch_size):
                 if np.floor(k2[i, 0, 0] * 7) % 2 == 1:
                     k2[i, 0, 0] = k2[i, 0, 0] - 1/7
@@ -180,7 +187,9 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
 
         sn, cn, dn, _ = ellipj(t, k2)
         q = 2 * np.arcsin(np.sqrt(k2) * sn)
-        print("finished numerical generation")
+
+        if verbose:
+            print("[Dataset] Numerical generation complete")
 
         if shuffle:
             for x in q:
@@ -191,55 +200,47 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
 
         # Image generation begins here
         pxls = np.ones((batch_size, traj_samples, img_size, img_size, 3))
-        print("finished pxls")
+        if verbose:
+            print("[Dataset] Blank images created")
+
         x = center_x + np.round(np.cos(q) * str_len)
         y = center_y + np.round(np.sin(q) * str_len)
-        #print(np.shape(x))
-        print("finished x and y generation")
-        idx = np.indices((batch_size, traj_samples))
-        bob_idx = np.indices((2 * bob_size + 1, 2 * bob_size + 1)) - bob_size
 
-        pos = np.expand_dims(np.stack((x, y), axis=0), [0, 1])
+        idx = np.indices((batch_size, traj_samples))
+        idx = np.expand_dims(idx, [0, 1, 5])
+
+        bob_idx = np.indices((2 * bob_size + 1, 2 * bob_size + 1)) - bob_size
         bob_idx = np.swapaxes(bob_idx, 0, 2)
         bob_idx = np.expand_dims(bob_idx, [3, 4, 5])
-        #print(np.shape(pos))
-        #print(np.shape(bob_idx))
-        #1 1 2 b t 2
-        #5 5 2 1 1 1
+
+        pos = np.expand_dims(np.stack((x, y), axis=0), [0, 1])
         pos = pos + bob_idx
-        #print(np.shape(pos))
         pos = np.reshape(pos, (bob_area, 2, batch_size, traj_samples, 2))
         pos = np.expand_dims(pos, 0)
-        #(1, 25, 2, b, t, 2)
-        #(1, 1, 2, b, t, 1)
-        idx = np.expand_dims(idx, [0, 1, 5])
-        #(2, 1, 1, 1, 1, 2)
+
         c = np.expand_dims(np.array([[1, 1], [0, 2]]), [1, 2, 3, 4])
+
         idx, pos, c = np.broadcast_arrays(idx, pos, c)
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
-        idx = np.concatenate((idx, pos, c), axis=2)
+        idx_final = np.concatenate((idx, pos, c), axis=2)
 
-        idx = np.swapaxes(idx, 0, 2)
-        idx = np.reshape(idx, (5, 4 * batch_size * traj_samples * bob_area))
+        idx_final = np.swapaxes(idx, 0, 2)
+        idx_final = np.reshape(idx, (5, 4 * batch_size * traj_samples * bob_area))
         idx = idx.astype('int32')
-        #print(np.shape(pxls))
-        #print(q)
-        #input(idx)
-        #(2, 25, 5, b, t, 2)
-        print("finished index generation")
+        if verbose:
+            print("[Dataset] Color indices computed")
 
         pxls[idx[0], idx[1], idx[2], idx[3], idx[4]] = 0
         pxls = pxls.astype(np.uint8)
-        #pxls = pxls * 255
-        #input(pxls)
-        print("completed image generation")
+        if verbose:
+            print("[Dataset] Images computed")
 
-        for i in range(0, batch_size):
+        """for i in range(0, batch_size):
             for j in range(0, traj_samples):
                 img = pxls[i, j, :, :, :] * 255
                 img = Image.fromarray(img, 'RGB')
                 img.show()
-                input("continue...")
+                input("continue...")"""
 
         pxls = np.swapaxes(pxls, 4, 2)
         return np.reshape(k2, (batch_size, 1)), pxls
@@ -254,11 +255,18 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         i = random.randint(0, self.trajectory_length - 1)
         j = random.randint(0, self.trajectory_length - 1)
-        return [
-            torch.FloatTensor(self.data[idx][i]),
-            torch.FloatTensor(self.data[idx][j]),
-            self.k2[idx]
-        ]  # [first_view, second_view, energy]
+        if torch.cuda.is_available():
+            return [
+                torch.cuda.FloatTensor(self.data[idx][i]),
+                torch.cuda.FloatTensor(self.data[idx][j]),
+                self.k2[idx]
+            ]  # [first_view, second_view, energy]
+        else:
+            return [
+                torch.FloatTensor(self.data[idx][i]),
+                torch.FloatTensor(self.data[idx][j]),
+                self.k2[idx]
+            ]
 
     def __len__(self):
         return self.size
@@ -272,11 +280,18 @@ class PendulumImageDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         i = random.randint(0, self.trajectory_length - 1)
         j = random.randint(0, self.trajectory_length - 1)
-        return [
-            torch.cuda.FloatTensor(self.data[idx][i]),
-            torch.cuda.FloatTensor(self.data[idx][j]),
-            self.k2[idx]
-        ]  # [first_view, second_view, energy]
+        if torch.cuda.is_available():
+            return [
+                torch.cuda.FloatTensor(self.data[idx][i]),
+                torch.cuda.FloatTensor(self.data[idx][j]),
+                self.k2[idx]
+            ]  # [first_view, second_view, energy]
+        else:
+            return [
+                torch.FloatTensor(self.data[idx][i]),
+                torch.FloatTensor(self.data[idx][j]),
+                self.k2[idx]
+            ]
 
     def __len__(self):
         return self.size
@@ -296,6 +311,7 @@ class ProjectionMLP(nn.Module):
             last_bn = nn.BatchNorm1d(out_dim, eps=0, affine=False)
         else:
             last_bn = nn.BatchNorm1d(out_dim)
+
         list_layers += [nn.Linear(hidden_dim, out_dim),
                         last_bn]
         self.net = nn.Sequential(*list_layers)
@@ -319,14 +335,18 @@ class PredictionMLP(nn.Module):
 
 
 class Branch(nn.Module):
-    def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None, resnet=True):
+    #def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None, resnet=True):
+    def __init__(self, repr_dim, proj_hidden=16, proj_out=-1, deeper, affine, encoder=None, resnet=True):
         super().__init__()
+
         if encoder:
             self.encoder = encoder
         elif resnet:
+            # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
             self.encoder = torchvision.models.resnet18(pretrained=False)
+            # self.encoder.fc = nn.Identity()  # replace the classification head with identity
             self.encoder.fc = nn.Sequential(
-                nn.Linear(512, 2)
+                nn.Linear(512, repr_dim)
             )
         else:
             self.encoder = nn.Sequential(
@@ -342,16 +362,15 @@ class Branch(nn.Module):
                 nn.Linear(64, 64),
                 nn.BatchNorm1d(64),
                 nn.ReLU(inplace=True),
-                nn.Linear(64, 3)
+                nn.Linear(64, repr_dim)
             )  # simple encoder to start with
-            # self.encoder = torchvision.models.resnet18(zero_init_residual=True)
-            # TODO: replace the encoder with CNN once we have 2D dataset
-            # self.encoder.fc = nn.Identity()  # replace the classification head with identity
-        # self.projector = ProjectionMLP(32, 64, 32, affine=affine, deeper=deeper)
-        if resnet:
-            self.projector = nn.Identity()
-        else:
+
+        if proj_out == -1:
             self.projector = nn.Identity()  # TODO: to keep it simple, for now we will not use projector
+        else:
+            # self.projector = ProjectionMLP(32, 64, 32, affine=affine, deeper=deeper)
+            self.projector = ProjectionMLP(repr_dim, proj_hidden, proj_out, affine=affine, deeper=deeper)
+
         self.net = nn.Sequential(
             self.encoder,
             self.projector
@@ -379,21 +398,21 @@ def supervised_loop(args, encoder=None):
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
-    ) # check if the data is actually different?
-    test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=512),
-        shuffle=False,
-        batch_size=512,
-        **dataloader_kwargs
     )
-    print("Completed data loading")
+    if args.validation:
+        test_loader = torch.utils.data.DataLoader(
+            dataset=PendulumImageDataset(size=512, gaps=args.gaps),
+            shuffle=False,
+            batch_size=512,
+            **dataloader_kwargs
+        )
+    if verbose:
+        print("[Supervised] Completed data loading")
 
     # optimization
-    dim_proj = [int(x) for x in args.dim_proj.split(',')]
-    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
-    main_branch.cuda()
-    if args.dim_pred:
-        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0]).cuda()
+    main_branch = Branch(args.repr_dim, deeper=args.deeper, affine=args.affine, encoder=encoder)
+    if torch.cuda.is_available():
+        main_branch.cuda()
 
     # optimization
     optimizer = torch.optim.SGD(
@@ -412,16 +431,12 @@ def supervised_loop(args, encoder=None):
         iter_per_epoch=len(train_loader),
         constant_predictor_lr=True
     )
-    if args.dim_pred:
-        pred_optimizer = torch.optim.SGD(
-            h.parameters(),
-            momentum=0.9,
-            lr=args.lr,
-            weight_decay=args.wd
-        )
 
     # macros
     b = main_branch.encoder
+
+    if verbose:
+        print("[Supervised] Model generation complete, training begins")
 
     start = time.time()
     os.makedirs(args.path_dir, exist_ok=True)
@@ -429,8 +444,8 @@ def supervised_loop(args, encoder=None):
     torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
 
     loss = torch.nn.MSELoss()
+
     for e in range(1, args.epochs + 1):
-        # declaring train
         b.train()
 
         # epoch
@@ -450,23 +465,29 @@ def supervised_loop(args, encoder=None):
             lr_scheduler.step()
             if args.dim_pred:
                 pred_optimizer.step()
-        if e % args.save_every == 0:
-            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
-            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
-            file_to_update.write(line_to_print + '\n')
-            file_to_update.flush()
-            print(line_to_print)
-        if e % args.progress_every == 0:
-            b.eval()
-            val_loss = -1
-            for it, (x1, x2, energy) in enumerate(train_loader):
-                val_loss = loss(b(x1), energy.float())
-                break
-            variance = np.std(out.detach().numpy())
-            line_to_print = f'epoch: {e} | loss: {out_loss.item()} | variance: {variance}| val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+
+        if e % args.progress_every == 0 or e % args.save_every == 0:
+            if validation:
+                b.eval()
+                val_loss = -1
+                for it, (x1, x2, energy) in enumerate(test_loader):
+                    val_loss = loss(b(x1), energy.float())
+                    break
+                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+            else:
+                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+
             print(line_to_print)
 
+            if e % args.save_every == 0:
+                torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+                file_to_update.write(line_to_print + '\n')
+                file_to_update.flush()
+
     file_to_update.close()
+    if verbose:
+        print("[Supervised] Training complete")
+
     return b
 
 
@@ -478,22 +499,26 @@ def training_loop(args, encoder=None):
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
-    ) # check if the data is actually different?
-    test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=512),
-        shuffle=False,
-        batch_size=512,
-        **dataloader_kwargs
     )
-    print("Completed data loading")
+    if validation:
+        test_loader = torch.utils.data.DataLoader(
+            dataset=PendulumImageDataset(size=512, gaps=args.gaps),
+            shuffle=False,
+            batch_size=512,
+            **dataloader_kwargs
+        )
+    if verbose:
+        print("[Self-supervised] Completed data loading")
 
     # model
-    dim_proj = [int(x) for x in args.dim_proj.split(',')]
-    main_branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder)
-    main_branch.cuda()
-    if args.dim_pred:
-        h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
-        h.cuda()
+    main_branch = Branch(args.repr_dim, deeper=args.deeper, affine=args.affine, encoder=encoder)
+    if torch.cuda.is_available():
+        main_branch.cuda()
+
+    if args.method == "simsiam":
+        h = PredictionMLP(args.repr_dim, args.dim_pred, args.repr_dim)
+        if torch.cuda.is_available():
+            h.cuda()
 
     # optimization
     optimizer = torch.optim.SGD(
@@ -512,7 +537,7 @@ def training_loop(args, encoder=None):
         iter_per_epoch=len(train_loader),
         constant_predictor_lr=True
     )
-    if args.dim_pred:
+    if args.method == "simsiam":
         pred_optimizer = torch.optim.SGD(
             h.parameters(),
             momentum=0.9,
@@ -529,16 +554,20 @@ def training_loop(args, encoder=None):
         return proj(b(x))
 
     def apply_loss(z1, z2):
-        if args.loss == 'square':
-            loss = (z1 - z2).pow(2).sum()
-        elif args.loss == 'infonce':
+        #if args.loss == 'square':
+        #    loss = (z1 - z2).pow(2).sum()
+        if args.method == 'infonce':
             loss = 0.5 * info_nce(z1, z2, temperature=args.temp) + 0.5 * info_nce(z2, z1, temperature=args.temp)
-        elif args.loss == 'cosine_predictor':
+        elif args.method == 'euclidean':
+            loss = 0.5 * info_nce(z1, z2, temperature=args.temp, distance="euclidean") + 0.5 * info_nce(z2, z1, temperature=args.temp, distance="euclidean")
+        elif args.method == 'simsiam':
             p1 = h(z1)
             p2 = h(z2)
             loss = negative_cosine_similarity(p1, z2) / 2 + negative_cosine_similarity(p2, z1) / 2
         return loss
-    print("Setup complete")
+
+    if verbose:
+        print("[Self-supervised] Model generation complete, training begins")
 
     # logging
     start = time.time()
@@ -550,14 +579,14 @@ def training_loop(args, encoder=None):
     for e in range(1, args.epochs + 1):
         # declaring train
         main_branch.train()
-        if args.dim_pred:
+        if args.method == "simsiam":
             h.train()
 
         # epoch
         for it, (x1, x2, energy) in enumerate(train_loader):
             # zero grad
             main_branch.zero_grad()
-            if args.dim_pred:
+            if args.method == "simsiam":
                 h.zero_grad()
 
             # forward pass
@@ -567,29 +596,40 @@ def training_loop(args, encoder=None):
 
             # optimization step
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(main_branch.parameters(), 3)
+            if args.clip != -1:
+                torch.nn.utils.clip_grad_norm_(main_branch.parameters(), args.clip)
             optimizer.step()
             lr_scheduler.step()
-            if args.dim_pred:
+            if args.method == "simsiam":
                 pred_optimizer.step()
 
-        if e % args.save_every == 0:
-            torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
-            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
-            file_to_update.write(line_to_print + '\n')
-            file_to_update.flush()
-            print(line_to_print)
-        if e % args.progress_every == 0:
-            line_to_print = f'epoch: {e} | loss: {loss.item():.3f} | time_elapsed: {time.time() - start:.3f}'
+        if e % args.progress_every == 0 or e % args.save_every == 0:
+            if validation:
+                main_branch.eval()
+                val_loss = -1
+                for it, (x1, x2, energy) in enumerate(test_loader):
+                    val_loss = loss(get_z(x1), get_z(x2)).item()
+                    break
+                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+            else:
+                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+
             print(line_to_print)
 
+            if e % args.save_every == 0:
+                torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
+                file_to_update.write(line_to_print + '\n')
+                file_to_update.flush()
 
     file_to_update.close()
+
+    if verbose:
+        print("[Self-supervised] Training complete")
+
     return main_branch.encoder
 
 
 def analysis_loop(args, encoder=None):
-    # TODO: can be used to study if the neural network has learned the conserved quantity.
     load_files = args.load_file
     if args.load_every != -1:
         load_files = []
@@ -610,17 +650,15 @@ def analysis_loop(args, encoder=None):
     b = []
 
     for load_file in load_files:
-        dim_proj = [int(x) for x in args.dim_proj.split(',')]
-        branch = Branch(dim_proj[1], dim_proj[0], args.deeper, args.affine, encoder=encoder).cuda()
-        if args.dim_pred:
-            h = PredictionMLP(dim_proj[0], args.dim_pred, dim_proj[0])
+        branch = Branch(args.repr_dim, deeper=args.deeper, affine=args.affine, encoder=encoder)
 
         branch.load_state_dict(torch.load(load_file)["state_dict"])
 
         branch.eval()
         b.append(branch.encoder)
 
-    print("Completed model loading")
+    if verbose:
+        print("[Analysis] Completed model loading")
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     test_loader = torch.utils.data.DataLoader(
@@ -628,8 +666,10 @@ def analysis_loop(args, encoder=None):
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
-    ) # check if the data is actually different?
-    print("Completed data loading")
+    )
+
+    if verbose:
+        print("[Analysis] Completed data loading")
 
     coded = []
     energies = []
@@ -651,10 +691,15 @@ def analysis_loop(args, encoder=None):
         np.save(os.path.join(args.path_dir, "testing/coded" + save_file + ".npy"), coded[idx])
     np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
 
+    if verbose:
+        print("[Analysis] Testing data saved")
+
     return coded, energies
 
 
 def main(args):
+    if args.verbose:
+        verbose = True
 
     set_deterministic(42)
     if args.mode == 'training':
@@ -671,29 +716,49 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dim_proj', default='1024,128', type=str)
-    parser.add_argument('--dim_pred', default=None, type=int)
-    parser.add_argument('--epochs', default=500, type=int)
-    parser.add_argument('--lr', default=0.02, type=float)
-    parser.add_argument('--bsz', default=512, type=int)
-    parser.add_argument('--wd', default=0.001, type=float)
-    parser.add_argument('--loss', default='infonce', type=str)
-    parser.add_argument('--affine', action='store_false')
-    parser.add_argument('--deeper', action='store_false')
-    parser.add_argument('--save_every', default=100, type=int)
-    parser.add_argument('--warmup_epochs', default=5, type=int)
+
     parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis', 'supervised'])
-    parser.add_argument('--path_dir', default='../output/pendulum', type=str)
-    parser.add_argument('--load_file', default='recent', type=str)
-    parser.add_argument('--test_size', default=1000, type=int)
-    parser.add_argument('--load_every', default='-1', type=int)
-    parser.add_argument('--progress_every', default=5, type=int)
-    parser.add_argument('--traj_len', default=100, type=int)
+    parser.add_argument('--method', default='infonce', type=str,
+                        choices=['infonce', 'simsiam', 'euclidean'])
+
+    # Data generation options
     parser.add_argument('--train_size', default=5120, type=int)
-    parser.add_argument('--temp', default=0.1, type=float)
+    parser.add_argument('--test_size', default=1000, type=int) # note: this is analysis loop only (not val)
+    parser.add_argument('--traj_len', default=100, type=int)
+
     parser.add_argument('--gaps', default=False, action='store_true')
+    parser.add_argument('--noise', default=0., type=float) # not implemented
+
+    # File I/O
+    parser.add_argument('--path_dir', default='../output/pendulum', type=str)
+
+    parser.add_argument('--load_file', default='recent', type=str)
+    parser.add_argument('--load_every', default='-1', type=int)
+
+    # Training reporting options
+    parser.add_argument('--progress_every', default=5, type=int)
+    parser.add_argument('--save_every', default=100, type=int)
+    parser.add_argument('--verbose', default=False, action='store_true')
+    parser.add_argument('--validation', default=False, action='store_true')
+
+    # Optimizer options
+    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--bsz', default=512, type=int)
+    parser.add_argument('--warmup_epochs', default=5, type=int)
+
+    parser.add_argument('--lr', default=0.02, type=float)
     parser.add_argument('--pred_lr', default=0.02, type=float)
+    parser.add_argument('--wd', default=0.001, type=float)
+
+    parser.add_argument('--temp', default=0.1, type=float) # not implemented
+    parser.add_argument('--clip', default=3.0, type=float)
+
+    # NN size options
+    parser.add_argument('--dim_pred', default=2048, type=int)
+    parser.add_argument('--repr_dim', default=2, type=int)
+    parser.add_argument('--affine', action='store_false')
+    parser.add_argument('--deeper', action='store_false')
 
     args = parser.parse_args()
     main(args)
