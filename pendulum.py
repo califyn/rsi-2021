@@ -104,7 +104,9 @@ def info_nce(z1, z2, temperature=0.1):
     """
     if z1.size()[1] <= 1:
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
+    # normalize !
     logits = z1 @ z2.T
+    logits = 2 * z1 @ z2.T - z1 @ z1.T - z2 @ z2.T # torch.cdist b'=1
     logits /= temperature
     n = z1.shape[0]
     labels = torch.arange(0, n, dtype=torch.long).cuda()
@@ -226,12 +228,12 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         #input(pxls)
         print("completed image generation")
 
-        """for i in range(0, batch_size):
+        for i in range(0, batch_size):
             for j in range(0, traj_samples):
-                img = pxls[i, j, :, :, :]
+                img = pxls[i, j, :, :, :] * 255
                 img = Image.fromarray(img, 'RGB')
                 img.show()
-                input("continue...")"""
+                input("continue...")
 
         pxls = np.swapaxes(pxls, 4, 2)
         return np.reshape(k2, (batch_size, 1)), pxls
@@ -256,7 +258,7 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
         return self.size
 
 class PendulumImageDataset(torch.utils.data.Dataset):
-    def __init__(self, size=5120, trajectory_length=50, noise=0.00):
+    def __init__(self, size=10, trajectory_length=50, noise=0.00):
         self.size = size
         self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length)
         self.trajectory_length = trajectory_length
@@ -492,7 +494,7 @@ def training_loop(args, encoder=None):
         momentum=0.9,
         lr=args.lr,
         weight_decay=args.wd
-    )
+    ) # extremely sensitive to learning rate
     lr_scheduler = LRScheduler(
         optimizer=optimizer,
         warmup_epochs=args.warmup_epochs,
