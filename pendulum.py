@@ -104,6 +104,8 @@ def info_nce(z1, z2, temperature=0.1):
     """
     if z1.size()[1] <= 1:
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
+    z1 = torch.nn.functional.normalize(z1, dim=1)
+    z2 = torch.nn.functional.normalize(z2, dim=1)
     logits = z1 @ z2.T
     logits /= temperature
     n = z1.shape[0]
@@ -125,7 +127,7 @@ def simclr_loss(z1, z2, temperature=0.1):
 
 # dataset
 def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
-        shuffle=True, check_energy=False, k2=None, image=True,
+        shuffle=True, check_energy=False, k2=None, image=True, gaps=False,
         blur=False, img_size=64, diff_time=0.5, bob_size=1, continuous=False):
     """
     pendulum dataset generation
@@ -164,6 +166,11 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
         t = np.stack((t, t + diff_time), axis=-1)
         k2 = rng.uniform(size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
+        if gaps:
+            print("gaps")
+            for i in range(0, batch_size):
+                if np.floor(k2[i, 0, 0] * 5) % 2 == 1:
+                    k2[i, 0, 0] = k2[i, 0, 0] - 0.2
 
         center_x = img_size // 2
         center_y = img_size // 2
@@ -367,7 +374,7 @@ def plotting_loop(args):
 def supervised_loop(args, encoder=None):
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(),
+        dataset=PendulumImageDataset(size=args.train_size),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -466,7 +473,7 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(),
+        dataset=PendulumImageDataset(size=args.train_size),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -523,7 +530,7 @@ def training_loop(args, encoder=None):
         if args.loss == 'square':
             loss = (z1 - z2).pow(2).sum()
         elif args.loss == 'infonce':
-            loss = 0.5 * info_nce(z1, z2) + 0.5 * info_nce(z2, z1)
+            loss = 0.5 * info_nce(z1, z2, temperature=args.temp) + 0.5 * info_nce(z2, z1, temperature=args.temp)
         elif args.loss == 'cosine_predictor':
             p1 = h(z1)
             p2 = h(z2)
@@ -681,6 +688,8 @@ if __name__ == '__main__':
     parser.add_argument('--load_every', default='-1', type=int)
     parser.add_argument('--progress_every', default=5, type=int)
     parser.add_argument('--traj_len', default=100, type=int)
+    parser.add_argument('--train_size', default=5120, type=int)
+    parser.add_argument('--temp', default=0.1, type=float)
 
     args = parser.parse_args()
     main(args)
