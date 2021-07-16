@@ -79,7 +79,11 @@ class LRScheduler(object):
     def get_lr(self):
         return self.current_lr
 
-def negative_cosine_similarity(p, z):
+def euclidean_dist(z1, z2):
+    n = z1.shape[0]
+    return 2 * z1 @ z2.T - torch.diagonal(z1 @ z1.T).repeat(n).reshape((n,n)).T - torch.diagonal(z2 @ z2.T).repeat(n).reshape((n,n))
+
+def simsiam_loss(p, z, distance="cosine"):
     """
     Negative cosine similarity. (Cosine similarity is the cosine of the angle
     between two vectors of arbitrary length.)
@@ -89,7 +93,10 @@ def negative_cosine_similarity(p, z):
     :param z: the second vector. z stands for representation
     :return: -cosine_similarity(p, z)
     """
-    return - F.cosine_similarity(p, z.detach(), dim=-1).mean()
+    if distance == "euclidean":
+        return - torch.diagonal(euclidean_dist(p, z.detach())).mean()
+    elif distance == "cosine":
+        return - F.cosine_similarity(p, z.detach(), dim=-1).mean()
 
 
 def info_nce(z1, z2, temperature=0.1, distance="cosine"):
@@ -101,16 +108,16 @@ def info_nce(z1, z2, temperature=0.1, distance="cosine"):
     :param temperature: how sharp the prediction task is
     :return: infoNCE(z1, z2)
     """
-    if z1.size()[1] <= 1:
+    if z1.size()[1] <= 1 and distance == "cosine":
         raise UserWarning('InfoNCE loss has only one dimension, add more dimensions')
 
-    z1 = torch.nn.functional.normalize(z1, dim=1)
-    z2 = torch.nn.functional.normalize(z2, dim=1)
-
     if distance == "cosine":
+        z1 = torch.nn.functional.normalize(z1, dim=1)
+        z2 = torch.nn.functional.normalize(z2, dim=1)
         logits = z1 @ z2.T
     elif distance == "euclidean":
-        logits = 2 * z1 @ z2.T - z1 @ z1.T - z2 @ z2.T
+        logits = euclidean_dist(z1, z2)
+
     logits /= temperature
     if torch.cuda.is_available():
         logits = logits.cuda()
@@ -177,8 +184,8 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         k2 = rng.uniform(size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
         if gaps:
             for i in range(0, batch_size):
-                if np.floor(k2[i, 0, 0] * 7) % 2 == 1:
-                    k2[i, 0, 0] = k2[i, 0, 0] - 1/7
+                if np.floor(k2[i, 0, 0] * 3) % 2 == 1:
+                    k2[i, 0, 0] = k2[i, 0, 0] - 1/3
 
         center_x = img_size // 2
         center_y = img_size // 2
@@ -196,7 +203,7 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
                 rng.shuffle(x, axis=0) # TODO: check if the shapes work out
 
         if noise > 0:
-            q += noise * rng.standard_normal(size=p.shape)
+            q += noise * rng.standard_normal(size=q.shape)
 
         # Image generation begins here
         pxls = np.ones((batch_size, traj_samples, img_size, img_size, 3))
@@ -224,18 +231,19 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
 
-        idx_final = np.swapaxes(idx, 0, 2)
-        idx_final = np.reshape(idx, (5, 4 * batch_size * traj_samples * bob_area))
-        idx = idx.astype('int32')
+        idx_final = np.swapaxes(idx_final, 0, 2)
+        idx_final = np.reshape(idx_final, (5, 4 * batch_size * traj_samples * bob_area))
+        idx_final = idx_final.astype('int32')
         if verbose:
             print("[Dataset] Color indices computed")
 
-        pxls[idx[0], idx[1], idx[2], idx[3], idx[4]] = 0
-        pxls = pxls.astype(np.uint8)
+        pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
         if verbose:
             print("[Dataset] Images computed")
 
-        """for i in range(0, batch_size):
+        """
+        pxls = pxls.astype(np.uint8)
+        for i in range(0, batch_size):
             for j in range(0, traj_samples):
                 img = pxls[i, j, :, :, :] * 255
                 img = Image.fromarray(img, 'RGB')
@@ -336,7 +344,7 @@ class PredictionMLP(nn.Module):
 
 class Branch(nn.Module):
     #def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None, resnet=True):
-    def __init__(self, repr_dim, proj_hidden=16, proj_out=-1, deeper, affine, encoder=None, resnet=True):
+    def __init__(self, repr_dim, proj_hidden=16, proj_out=-1, deeper=True, affine=True, encoder=None, resnet=True):
         super().__init__()
 
         if encoder:
@@ -467,7 +475,7 @@ def supervised_loop(args, encoder=None):
                 pred_optimizer.step()
 
         if e % args.progress_every == 0 or e % args.save_every == 0:
-            if validation:
+            if args.validation:
                 b.eval()
                 val_loss = -1
                 for it, (x1, x2, energy) in enumerate(test_loader):
@@ -495,12 +503,12 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=args.train_size, gaps=args.gaps),
+        dataset=PendulumImageDataset(size=args.train_size, gaps=args.gaps, noise=args.noise),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
     )
-    if validation:
+    if args.validation:
         test_loader = torch.utils.data.DataLoader(
             dataset=PendulumImageDataset(size=512, gaps=args.gaps),
             shuffle=False,
@@ -553,17 +561,15 @@ def training_loop(args, encoder=None):
     def get_z(x):
         return proj(b(x))
 
-    def apply_loss(z1, z2):
+    def apply_loss(z1, z2, distance):
         #if args.loss == 'square':
         #    loss = (z1 - z2).pow(2).sum()
         if args.method == 'infonce':
-            loss = 0.5 * info_nce(z1, z2, temperature=args.temp) + 0.5 * info_nce(z2, z1, temperature=args.temp)
-        elif args.method == 'euclidean':
-            loss = 0.5 * info_nce(z1, z2, temperature=args.temp, distance="euclidean") + 0.5 * info_nce(z2, z1, temperature=args.temp, distance="euclidean")
+            loss = 0.5 * info_nce(z1, z2, temperature=args.temp, distance=distance) + 0.5 * info_nce(z2, z1, temperature=args.temp, distance=distance)
         elif args.method == 'simsiam':
             p1 = h(z1)
             p2 = h(z2)
-            loss = negative_cosine_similarity(p1, z2) / 2 + negative_cosine_similarity(p2, z1) / 2
+            loss = simsiam_loss(p1, z2, distance=distance) / 2 + simsiam_loss(p2, z1, distance=distance) / 2
         return loss
 
     if verbose:
@@ -592,27 +598,31 @@ def training_loop(args, encoder=None):
             # forward pass
             z1 = get_z(x1)
             z2 = get_z(x2)
-            loss = apply_loss(z1, z2)
+            if not args.euclidean:
+                loss = apply_loss(z1, z2, distance="cosine")
+            else:
+                loss = apply_loss(z1, z2, distance="euclidean")
 
             # optimization step
             loss.backward()
             if args.clip != -1:
                 torch.nn.utils.clip_grad_norm_(main_branch.parameters(), args.clip)
+                torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
             optimizer.step()
             lr_scheduler.step()
             if args.method == "simsiam":
                 pred_optimizer.step()
 
         if e % args.progress_every == 0 or e % args.save_every == 0:
-            if validation:
+            if args.validation:
                 main_branch.eval()
                 val_loss = -1
                 for it, (x1, x2, energy) in enumerate(test_loader):
                     val_loss = loss(get_z(x1), get_z(x2)).item()
                     break
-                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+                line_to_print = f'epoch: {e} | loss: {loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
             else:
-                line_to_print = f'epoch: {e} | loss: {out_loss.item()} | time_elapsed: {time.time() - start:.3f}'
+                line_to_print = f'epoch: {e} | loss: {loss.item()} | std: {np.std(loss.detach().cpu().numpy())} | time_elapsed: {time.time() - start:.3f}'
 
             print(line_to_print)
 
@@ -620,6 +630,7 @@ def training_loop(args, encoder=None):
                 torch.save(dict(epoch=0, state_dict=main_branch.state_dict()), os.path.join(args.path_dir, f'{e}.pth'))
                 file_to_update.write(line_to_print + '\n')
                 file_to_update.flush()
+                print("[saved]")
 
     file_to_update.close()
 
@@ -634,7 +645,7 @@ def analysis_loop(args, encoder=None):
     if args.load_every != -1:
         load_files = []
         idx = 0
-        while 1 + 1 == 2:
+        while 1 + 1 == 2 and idx * args.load_every <= args.load_max:
             file_to_add = os.path.join(args.path_dir, str(idx * args.load_every) + ".pth")
             if os.path.isfile(file_to_add):
                 load_files.append(file_to_add)
@@ -651,8 +662,10 @@ def analysis_loop(args, encoder=None):
 
     for load_file in load_files:
         branch = Branch(args.repr_dim, deeper=args.deeper, affine=args.affine, encoder=encoder)
-
         branch.load_state_dict(torch.load(load_file)["state_dict"])
+
+        if torch.cuda.is_available():
+            branch.cuda()
 
         branch.eval()
         b.append(branch.encoder)
@@ -698,6 +711,8 @@ def analysis_loop(args, encoder=None):
 
 
 def main(args):
+    global verbose
+
     if args.verbose:
         verbose = True
 
@@ -720,7 +735,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='training', type=str,
                         choices=['plotting', 'training', 'analysis', 'supervised'])
     parser.add_argument('--method', default='infonce', type=str,
-                        choices=['infonce', 'simsiam', 'euclidean'])
+                        choices=['infonce', 'simsiam'])
 
     # Data generation options
     parser.add_argument('--train_size', default=5120, type=int)
@@ -735,27 +750,29 @@ if __name__ == '__main__':
 
     parser.add_argument('--load_file', default='recent', type=str)
     parser.add_argument('--load_every', default='-1', type=int)
+    parser.add_argument('--load_max', default=1000000, type=int)
 
     # Training reporting options
     parser.add_argument('--progress_every', default=5, type=int)
-    parser.add_argument('--save_every', default=100, type=int)
+    parser.add_argument('--save_every', default=20, type=int)
     parser.add_argument('--verbose', default=False, action='store_true')
     parser.add_argument('--validation', default=False, action='store_true')
 
     # Optimizer options
-    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--epochs', default=100, type=int)
     parser.add_argument('--bsz', default=512, type=int)
     parser.add_argument('--warmup_epochs', default=5, type=int)
 
     parser.add_argument('--lr', default=0.02, type=float)
     parser.add_argument('--pred_lr', default=0.02, type=float)
     parser.add_argument('--wd', default=0.001, type=float)
+    parser.add_argument('--euclidean', default=False, action='store_true')
 
     parser.add_argument('--temp', default=0.1, type=float) # not implemented
     parser.add_argument('--clip', default=3.0, type=float)
 
     # NN size options
-    parser.add_argument('--dim_pred', default=2048, type=int)
+    parser.add_argument('--dim_pred', default=1, type=int)
     parser.add_argument('--repr_dim', default=2, type=int)
     parser.add_argument('--affine', action='store_false')
     parser.add_argument('--deeper', action='store_false')
