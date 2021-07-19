@@ -621,7 +621,8 @@ def training_loop(args, encoder=None):
             loss.backward()
             if args.clip != -1:
                 torch.nn.utils.clip_grad_norm_(main_branch.parameters(), args.clip)
-                torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
+                if args.method == "simsiam":
+                    torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
             optimizer.step()
             lr_scheduler.step()
             if args.method == "simsiam":
