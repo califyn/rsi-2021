@@ -189,7 +189,7 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
 
         center_x = img_size // 2
         center_y = img_size // 2
-        str_len = img_size - 2 - img_size // 2 - bob_size
+        str_len = img_size - 4 - img_size // 2 - bob_size
         bob_area = (2 * bob_size + 1)**2
 
         sn, cn, dn, _ = ellipj(t, k2)
@@ -226,29 +226,43 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         pos = np.expand_dims(pos, 0)
 
         c = np.expand_dims(np.array([[1, 1], [0, 2]]), [1, 2, 3, 4])
+        print(np.shape(c))
 
         idx, pos, c = np.broadcast_arrays(idx, pos, c)
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
 
+        translation_noise = rng.uniform(0.000001, 1, size=(2, batch_size, traj_samples))
+        translation_noise = np.minimum(np.ones(translation_noise.shape),
+                                np.floor(np.abs(translation_noise) / (1 - 2 * noise))) * translation_noise / np.abs(translation_noise)
+        translation_noise = np.concatenate((np.zeros(translation_noise.shape), translation_noise, np.zeros(translation_noise.shape)), axis=0)
+        translation_noise = translation_noise[:5]
+        translation_noise = np.expand_dims(translation_noise, [0, 1, 5])
+        idx_final = idx_final + translation_noise
+
         idx_final = np.swapaxes(idx_final, 0, 2)
         idx_final = np.reshape(idx_final, (5, 4 * batch_size * traj_samples * bob_area))
         idx_final = idx_final.astype('int32')
+
         if verbose:
             print("[Dataset] Color indices computed")
 
         pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
+        pxls = pxls + noise / 2 * rng.standard_normal(size=pxls.shape)
+        tint_noise = rng.uniform(- noise / 4, noise / 4, size=(batch_size, traj_samples, 1, 1, 3))
+        pxls = pxls + tint_noise
+        pxls = np.minimum(np.ones(pxls.shape), np.maximum(np.zeros(pxls.shape), pxls))
+
         if verbose:
             print("[Dataset] Images computed")
 
-        """
+        pxls = pxls * 255
         pxls = pxls.astype(np.uint8)
         for i in range(0, batch_size):
             for j in range(0, traj_samples):
-                img = pxls[i, j, :, :, :] * 255
-                img = Image.fromarray(img, 'RGB')
+                img = Image.fromarray(pxls[i,j,:,:,:], 'RGB')
                 img.show()
-                input("continue...")"""
+                input("continue...")
 
         pxls = np.swapaxes(pxls, 4, 2)
         return np.reshape(k2, (batch_size, 1)), pxls
