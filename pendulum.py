@@ -231,6 +231,8 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
 
+        print(np.shape(idx_final))
+
         idx_final = np.swapaxes(idx_final, 0, 2)
         idx_final = np.reshape(idx_final, (5, 4 * batch_size * traj_samples * bob_area))
         idx_final = idx_final.astype('int32')
@@ -607,7 +609,8 @@ def training_loop(args, encoder=None):
             loss.backward()
             if args.clip != -1:
                 torch.nn.utils.clip_grad_norm_(main_branch.parameters(), args.clip)
-                torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
+                if args.method == "simsiam":
+                    torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
             optimizer.step()
             lr_scheduler.step()
             if args.method == "simsiam":
