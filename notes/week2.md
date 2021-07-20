@@ -44,3 +44,87 @@ this is the normal version with angle vs energy:
 why the little tail up? maybe bc hard to distinguish at low energy?
 
 how to tell if an embedding is "good"
+
+noise helps a lot with simsiam (still not that good though)
+
+think the issue is that the simple predictor is not distorting the values enough
+
+yay got x11 forwardin gto work: use -Y and start up XQuartz
+
+eucliean works: ![](../data/euclidean.png)
+
+gap compression phenomenon: ![](../data/euclidean_2gapv.png)
+
+simsiam works for real.  here are parameters:
+
+``python pendulum.py --method=simsiam --euclidean --verbose --noise=0.05 --epochs=250 --lr=0.02 --wd=0.01 --pred_lr=0.1 --clip=1``
+
+i think you need high pred lr and strong clipping/weight decay to fix it
+
+simsiam does better because it actually keeps the dimensionality of the representation (no weird smoke curve things).  even in 3d the representation is very faithful:
+
+![](../data/simsiam_3d.png)
+
+it does "collapse" the line segment gets shorter and shorter
+
+fix list 1:
+
+- [x] more Noise
+- [ ] fix variance
+- [ ] prefer euclidean over cosine
+- [ ] cropped image view
+- [ ] partial trails
+- [ ] scrambled trails
+- [ ] test set 20x per energy, less pendulums (maybe 100 ? if possible)
+
+send the code for the image generation
+
+infonce without clipping
+
+maximum variance = unfolding?
+
+isomap
+
+extrapolation
+
+manifold learning => 1D then correlation (spearman correlation)
+
+predict energy from embedding (kernel regression)
+
+simple NN for embedding => energy
+
+pca to look at simsiam lines
+
+transfer learn = generalization
+
+simsiam is clustering?
+
+peter/anugrah spectral embedding https://openreview.net/pdf?id=rkmf_v1vf
+
+what is unexpected
+
+fix list 2: unfolding wish list
+- [ ] maximum variance
+- [ ] partially deep NN on output
+- [ ] isomap, + correlation (spearman?)
+- [ ] kernel regression???
+- [ ] pca
+- [ ] spectral embedding
+
+wish list:
+- [ ] "objective" battery of tests for noise resistance + partial data + interpolation + extrapolation
+  - [ ] include more than one image creation method
+- [ ] "objective" criterion for embedding (remember cosine exists too)
+- [ ] code up all of these:
+  - [x] infonce
+  - [ ] simclr
+  - [x] simsiam
+  - [ ] byol
+  - [ ] normie batch norm
+  - [ ] decorrelated batch norm
+  - [ ] barlow twins
+  - [ ] (and maybe take a look at that vision transformer paper?)
+
+info nce explodes without clipping; yes
+
+euclidean doesnt work but cosine does
