@@ -1,14 +1,15 @@
 fix list 1:
 
 - [x] more Noise
-- [ ] fix variance (x)
-- [ ] prefer euclidean over cosine (x)
-- [ ] cropped image view (x)
-- [ ] time window (x)
-- [ ] time range (x)
-- [ ] min energy max energy (x)
-- [ ] gap fixes (x)
-- [ ] test set 20x per energy, less pendulums (maybe 100 ? if possible) (x)
+- [x] fix variance
+- [x] prefer euclidean over cosine
+- [x] cropped image view
+- [x] time window
+- [x] time range
+- [x] min energy max energy
+- [x] gap fixes
+- [x] test set 20x per energy, less pendulums (maybe 100 ? if possible)
+- [ ] only one side against y axis
 
 fix list 2: unfolding wish list
 - [ ] maximum variance
@@ -18,19 +19,24 @@ fix list 2: unfolding wish list
 - [ ] pca
 - [ ] spectral embedding
 
+fix list 3: self-sup tactics wish list
+- [x] infonce
+- [ ] simclr
+- [x] simsiam
+- [ ] byol
+- [ ] normie batch norm
+- [ ] decorrelated batch norm
+- [ ] barlow twins
+- [ ] (and maybe take a look at that vision transformer paper?)
+
 wish list:
 - [ ] "objective" battery of tests for noise resistance + partial data + interpolation + extrapolation
   - [ ] include more than one image creation method
 - [ ] "objective" criterion for embedding (remember cosine exists too)
-- [ ] code up all of these: (with optimal hyperparameters)
-  - [x] infonce
-  - [ ] simclr
-  - [x] simsiam
-  - [ ] byol
-  - [ ] normie batch norm
-  - [ ] decorrelated batch norm
-  - [ ] barlow twins
-  - [ ] (and maybe take a look at that vision transformer paper?)
+- [ ] analyzing noise as a dimension
+- [ ] what is an interesting question to ask?
+- [ ] WHY do we have compression
+
 
 does clipping change embedding
 
@@ -58,3 +64,9 @@ spearman correlation vs discontinuities/gaps (interpolation vs. extrapolation)
 https://arxiv.org/pdf/2005.10243.pdf infomin principle -- also theres a bunch of citations for frame based video contrastive
 
 https://openreview.net/pdf?id=enoVQWLsfyL viewmaker
+-----
+well,it seems like the model chooses the "best" possible place to put the blank images.  best being minimizing expected distance to true encoding
+
+does compression happen b/c of clipping? will representations get bigger if clipped weaker?
+
+mathematically does it help to increase the distance?
