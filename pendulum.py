@@ -1,5 +1,6 @@
 # python imports
 import os
+import subprocess
 import argparse
 import time
 import random
@@ -133,7 +134,7 @@ def info_nce(z1, z2, temperature=0.1, distance="cosine"):
 def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         shuffle=True, check_energy=False, k2=None, image=True,
         blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False,
-        gaps=-1, crop=1.0, crop_c=[-1,-1], t_window=-1, t_range=-1, mink=0, maxk=1):
+        gaps=[-1,-1], crop=1.0, crop_c=[-1,-1], t_window=-1, t_range=-1, mink=0, maxk=1):
     """
     pendulum dataset generation
     :param batch_size: number of pendulums
@@ -187,12 +188,12 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         return k2, data
 
     elif image and not blur:
-        if t_window != -1 and t_range != [-1, -1]:
+        if t_window != [-1, -1] and t_range != -1:
             raise UserWarning("Cannot use both time windows & ranges at the same time")
-        elif t_window != -1:
+        elif t_window != [-1, -1]:
             t = rng.uniform(t_window[0], t_window[1], size=(batch_size, traj_samples))
             t = np.stack((t, t + diff_time), axis=-1) # time steps
-        elif t_range != [-1, -1]:
+        elif t_range != -1:
             t_base = rng.uniform(0, 10. * traj_samples, size=(batch_size, 1))
             t_rng = rng.uniform(0, t_range, size=(batch_size, traj_samples))
             t = t_base + t_rng
@@ -201,18 +202,15 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
             t = rng.uniform(0, 10. * traj_samples, size=(batch_size, traj_samples))
             t = np.stack((t, t + diff_time), axis=-1) # time steps
 
-        if gaps == -1:
+        if gaps == [-1,-1]:
             k2 = rng.uniform(mink, maxk, size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))  # energies (conserved)
         else:
-            k2 = rng.uniform(0, 1 - gaps[1], size=(batch_size, 1, 1)) if k2 is None else k2 * np.ones((batch_size, 1, 1))
-            k2 = k2 + np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * ((1 - gaps[1]) / (gaps[0] + 1) + gaps[1] / gaps[0])
+            k2 = rng.uniform(0, 1 - gaps[1], size=(batch_size, 1, 1) if k2 is None else k2 * np.ones((batch_size, 1, 1)))
+            prefix = np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * ((1 - gaps[1]) / (gaps[0] + 1) + gaps[1] / gaps[0])
+            frac = k2 - np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * (1 - gaps[1]) / (gaps[0] + 1)
+            k2 = prefix + frac
             k2 = k2 * (maxk - mink) + mink
-
-        center_x = img_size // 2
-        center_y = img_size // 2
-        str_len = img_size - 4 - img_size // 2 - bob_size
-        bob_area = (2 * bob_size + 1)**2
-
+        
         sn, cn, dn, _ = ellipj(t, k2)
         q = 2 * np.arcsin(np.sqrt(k2) * sn)
 
@@ -230,10 +228,18 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         if crop != 1.0:
             if crop_c == [-1, -1]:
                 crop_c = [1 - crop / 2, 1 - crop / 2]
-            left = np.floor(crop_c[0] - img_size / (2 * crop))
-            top = np.floor(crop_c[1] - img_size / (2 * crop))
+            big_img = np.floor(img_size / crop + 4).astype('int32')
+            left = np.floor(crop_c[0] * big_img - img_size / 2)
+            top = np.floor(crop_c[1] * big_img - img_size / 2)
+        else:
+            big_img = img_size
 
-        pxls = np.ones((batch_size, traj_samples, img_size + 1, img_size + 1, 3))
+        center_x = big_img // 2
+        center_y = big_img // 2
+        str_len = big_img - 4 - big_img // 2 - bob_size
+        bob_area = (2 * bob_size + 1)**2
+
+        pxls = np.ones((batch_size, traj_samples, img_size + 2, img_size + 2, 3))
         if verbose:
             print("[Dataset] Blank images created")
 
@@ -257,14 +263,15 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         idx, pos, c = np.broadcast_arrays(idx, pos, c)
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
-
-        translation_noise = rng.uniform(0, 1, size=(2, batch_size, traj_samples))
-        translation_noise = np.minimum(np.ones(translation_noise.shape),
-                                np.floor(np.abs(translation_noise) / (1 - 2 * noise))) * translation_noise / np.abs(translation_noise)
-        translation_noise = np.concatenate((np.zeros(translation_noise.shape), translation_noise, np.zeros(translation_noise.shape)), axis=0)
-        translation_noise = translation_noise[:5]
-        translation_noise = np.expand_dims(translation_noise, [0, 1, 5])
-        idx_final = idx_final + translation_noise
+        
+        if noise > 0:
+            translation_noise = rng.uniform(0, 1, size=(2, batch_size, traj_samples))
+            translation_noise = np.minimum(np.ones(translation_noise.shape),
+                                    np.floor(np.abs(translation_noise) / (1 - 2 * noise))) * translation_noise / np.abs(translation_noise)
+            translation_noise = np.concatenate((np.zeros(translation_noise.shape), translation_noise, np.zeros(translation_noise.shape)), axis=0)
+            translation_noise = translation_noise[:5]
+            translation_noise = np.expand_dims(translation_noise, [0, 1, 5])
+            idx_final = idx_final + translation_noise
 
         idx_final = np.swapaxes(idx_final, 0, 2)
         idx_final = np.reshape(idx_final, (5, 4 * batch_size * traj_samples * bob_area))
@@ -274,12 +281,21 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
             print("[Dataset] Color indices computed")
 
         if crop == 1.0:
-            pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
-        else
-            pxls[idx_final[0], idx_final[1], np.min(idx_final[2] - left, img_size), np.min(idx_final[3] - top, img_size), idx_final[4]] = 0
-            pxls = pxls[:, :, img_size, img_size, :]
+            pxls[idx_final[0], idx_final[1], idx_final[2] + 1, idx_final[3] + 1, idx_final[4]] = 0
+        else:
+            #bigpxls = np.ones((batch_size, traj_samples, big_img + 2, big_img + 2, 3))
+            #bigpxls[idx_final[0], idx_final[1], idx_final[2] + 1, idx_final[3] + 1, idx_final[4]] = 0
+            idx_final[2] = idx_final[2] - left.astype('int32') + 1
+            idx_final[3] = idx_final[3] - top.astype('int32') + 1
+            idx_final[2] = np.maximum(idx_final[2], np.array(0))
+            idx_final[3] = np.maximum(idx_final[3], np.array(0))
+            idx_final[2] = np.minimum(idx_final[2], np.array(img_size + 1))
+            idx_final[3] = np.minimum(idx_final[3], np.array(img_size + 1))
 
-        pxls = pxls + noise / 2 * rng.standard_normal(size=pxls.shape)
+            pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
+        pxls = pxls[:, :, 1:img_size + 1, 1:img_size + 1, :]
+
+        pxls = pxls + noise / 4 * rng.standard_normal(size=pxls.shape)
         tint_noise = rng.uniform(- noise / 8, noise / 8, size=(batch_size, traj_samples, 1, 1, 3))
         pxls = pxls + tint_noise
         pxls = np.minimum(np.ones(pxls.shape), np.maximum(np.zeros(pxls.shape), pxls))
@@ -287,16 +303,23 @@ def pendulum_train_gen(batch_size, traj_samples=10, noise=0.,
         if verbose:
             print("[Dataset] Images computed")
 
-        pxls = pxls * 255
+        """pxls = pxls * 255
         pxls = pxls.astype(np.uint8)
-        for i in range(0, batch_size):
-            for j in range(0, traj_samples):
+        #bigpxls = bigpxls * 255
+        #bigpxls = bigpxls.astype(np.uint8)
+        for j in range(0, traj_samples):
+            for i in range(0, batch_size):
                 img = Image.fromarray(pxls[i,j,:,:,:], 'RGB')
                 img.show()
+                #fig, axs = plt.subplots(2)
+                #axs[0].imshow(pxls[i,j,:,:,:])
+                #axs[1].imshow(bigpxls[i,j,:,:,:])
+                #plt.show()
                 input("continue...")
+                #plt.clf()"""
 
         pxls = np.swapaxes(pxls, 4, 2)
-        return np.reshape(k2, (batch_size, 1)), pxls
+        return np.reshape(k2, (batch_size, 1)), pxls, q
 
 
 class PendulumNumericalDataset(torch.utils.data.Dataset):
@@ -327,40 +350,46 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
 class PendulumImageDataset(torch.utils.data.Dataset):
     def __init__(self, size=5120, trajectory_length=20, noise=0.00,
                     img_size=32, diff_time=0.5, gaps=-1, crop=1.0, crop_c=[.75,.5],
-                    t_window=-1, t_range=-1, mink=0, maxk=1, full_out=False):
+                    t_window=[-1,-1], t_range=-1, mink=0, maxk=1, full_out=False):
         self.size = size
-        self.k2, self.data = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length, noise=noise,
-                                                    img_size=img_size, diff_time=diff_time, gaps=gaps, crop=crop, crop_c=crop_c
-                                                    t_window=t_window, t_range=t_range, mink=mink, maxk, maxk)
+        self.k2, self.data, self.q = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length,
+                                                    img_size=img_size, diff_time=diff_time, gaps=gaps, crop=crop, crop_c=crop_c,
+                                                    t_window=t_window, t_range=t_range, mink=mink, maxk=maxk)
         self.trajectory_length = trajectory_length
         self.full = full_out
 
     def __getitem__(self, idx):
-        if self.full:
+        if not self.full:
             i = random.randint(0, self.trajectory_length - 1)
             j = random.randint(0, self.trajectory_length - 1)
             if torch.cuda.is_available():
                 return [
                     torch.cuda.FloatTensor(self.data[idx][i]),
                     torch.cuda.FloatTensor(self.data[idx][j]),
-                    self.k2[idx]
+                    self.k2[idx],
+                    self.q[idx][i],
+                    self.q[idx][j]
                 ]  # [first_view, second_view, energy]
             else:
                 return [
                     torch.FloatTensor(self.data[idx][i]),
                     torch.FloatTensor(self.data[idx][j]),
-                    self.k2[idx]
+                    self.k2[idx],
+                    self.q[idx][i],
+                    self.q[idx][j]
                 ]
         else:
             if torch.cuda.is_available():
                 return [
                     torch.cuda.FloatTensor(self.data[idx]),
-                    self.k2[idx]
+                    self.k2[idx],
+                    self.q[idx]
                 ]  # [first_view, second_view, energy]
             else:
                 return [
                     torch.FloatTensor(self.data[idx]),
-                    self.k2[idx]
+                    self.k2[idx],
+                    self.q[idx]
                 ]
 
     def __len__(self):
@@ -519,7 +548,7 @@ def supervised_loop(args, encoder=None):
         b.train()
 
         # epoch
-        for it, (x1, x2, energy) in enumerate(train_loader):
+        for it, (x1, x2, energy, q1, q2) in enumerate(train_loader):
             # zero grad
             b.zero_grad()
 
@@ -540,7 +569,7 @@ def supervised_loop(args, encoder=None):
             if args.validation:
                 b.eval()
                 val_loss = -1
-                for it, (x1, x2, energy) in enumerate(test_loader):
+                for it, (x1, x2, energy, q1, q2) in enumerate(test_loader):
                     val_loss = loss(b(x1), energy.float())
                     break
                 line_to_print = f'epoch: {e} | loss: {out_loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
@@ -653,7 +682,10 @@ def training_loop(args, encoder=None):
             h.train()
 
         # epoch
-        for it, (x1, x2, energy) in enumerate(train_loader):
+        losses = []
+        zmin = torch.tensor(10000)
+        zmax = torch.tensor(-10000)
+        for it, (x1, x2, energy, q1, q2) in enumerate(train_loader):
             # zero grad
             main_branch.zero_grad()
             if args.method == "simsiam":
@@ -662,16 +694,20 @@ def training_loop(args, encoder=None):
             # forward pass
             z1 = get_z(x1)
             z2 = get_z(x2)
+            zmin = torch.min(torch.min(z1, zmin))
+            zmax = torch.max(torch.max(z1, zmax))
+            zmin = torch.min(torch.min(z2, zmin))
+            zmax = torch.max(torch.max(z2, zmax))
+
             if args.cosine:
                 loss = apply_loss(z1, z2, distance="cosine")
             else:
                 loss = apply_loss(z1, z2, distance="euclidean")
-            std = torch.std(loss.detach())
+            losses.append(loss.item())
 
             # optimization step
             loss.backward()
             if args.clip != -1:
-                print("Hi")
                 torch.nn.utils.clip_grad_norm_(main_branch.parameters(), args.clip)
                 if args.method == "simsiam":
                     torch.nn.utils.clip_grad_norm_(h.parameters(), args.clip * 2)
@@ -679,19 +715,20 @@ def training_loop(args, encoder=None):
             lr_scheduler.step()
             if args.method == "simsiam":
                 pred_optimizer.step()
-            line_to_print = f'epoch: {e} | loss: {loss.item()} | std: {np.std(loss.detach().cpu().numpy())} | time_elapsed: {time.time() - start:.3f}'
-            print(line_to_print)
 
         if e % args.progress_every == 0 or e % args.save_every == 0:
             if args.validation:
                 main_branch.eval()
                 val_loss = -1
-                for it, (x1, x2, energy) in enumerate(test_loader):
+                for it, (x1, x2, energy, q1, q2) in enumerate(test_loader):
                     val_loss = loss(get_z(x1), get_z(x2)).item()
                     break
                 line_to_print = f'epoch: {e} | loss: {loss.item()} | val loss: {val_loss.item()} | time_elapsed: {time.time() - start:.3f}'
             else:
-                line_to_print = f'epoch: {e} | loss: {loss.item()} | std: {std.item()} | time_elapsed: {time.time() - start:.3f}'
+                losses = torch.tensor(losses)
+                losses = torch.std(losses)
+                zrange = zmax - zmin
+                line_to_print = f'epoch: {e} | loss: {loss.item()} | std: {losses.item()} | range: {zrange} | time_elapsed: {time.time() - start:.3f}'
 
             print(line_to_print)
 
@@ -744,7 +781,9 @@ def analysis_loop(args, encoder=None):
 
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     test_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=args.test_size, gaps=args.gaps, full_out=args.sparse_analysis),
+        dataset=PendulumImageDataset(size=args.test_size, trajectory_length=args.traj_len, noise=args.noise,full_out=args.sparse_analysis,
+                                        img_size=args.img_size, diff_time=args.diff_time, gaps=args.gaps, crop=args.crop, crop_c = args.crop_c,
+                                        t_window=args.t_window, t_range=args.t_range, mink=args.mink, maxk=args.maxk),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -753,26 +792,26 @@ def analysis_loop(args, encoder=None):
     if verbose:
         print("[Analysis] Completed data loading")
 
-    coded = []
-    energies = []
-
     coded = np.zeros((len(b), args.bsz, args.traj_len if args.sparse_analysis else 1, args.repr_dim))
-    energies = np.zeros((args.bsz))
-
-    for i in range(len(b)):
-        coded.append([])
 
     if args.sparse_analysis:
-        for it, (x, energy) in enumerate(test_loader):
+        for it, (x, energy, q) in enumerate(test_loader):
+            print(x.size())
             for i in range(len(b)):
                 for j in range(0, args.bsz):
-                    coded[i, it, j, :] = b[i](x[j]).cpu().detach().numpy()
-
+                    coded[i, j, :, :] = b[i](x[j, :, :, :, :]).cpu().detach().numpy()
+            energies = energy.cpu().detach().numpy()
+            qs = q.cpu().detach().numpy()
+            break
     else:
-        for it, (x1, x2, energy) in enumerate(test_loader):
+        for it, (x1, x2, energy, q1, q2) in enumerate(test_loader):
             for i in range(len(b)):
-                coded[i, it, 0, :] = b[i](x1).cpu().detach().numpy()
-            energies[it] = energy.cpu().detach().numpy()
+                coded[i, :, 0, :] = b[i](x1).cpu().detach().numpy()
+            energies = energy.cpu().detach().numpy()
+            qs = q1[:, 0].cpu().detach().numpy()
+            print(energies.shape)
+            print(qs.shape)
+            break
 
     coded = np.array(coded)
     energies = np.array(energies)
@@ -782,6 +821,7 @@ def analysis_loop(args, encoder=None):
         save_file = "-" + load_file.rpartition("/")[2].rpartition(".")[0]
         np.save(os.path.join(args.path_dir, "testing/coded" + save_file + ".npy"), coded[idx])
     np.save(os.path.join(args.path_dir, "testing/energies.npy"), energies)
+    np.save(os.path.join(args.path_dir, "testing/qs.npy"), qs)
 
     if verbose:
         print("[Analysis] Testing data saved")
@@ -795,15 +835,20 @@ def main(args):
     if args.verbose:
         verbose = True
 
+    args.gaps = args.gaps.split(",")
+    assert(len(args.gaps) == 2)
+    args.gaps[0] = float(args.gaps[0])
+    args.gaps[1] = float(args.gaps[1])
+
     args.crop_c = args.crop_c.split(",")
     assert(len(args.crop_c) == 2)
     args.crop_c[0] = float(args.crop_c[0])
     args.crop_c[1] = float(args.crop_c[1])
 
-    args.t_range = args.t_range.split(",")
-    assert(len(args.t_range) == 2)
-    args.t_range[0] = float(args.t_range[0])
-    args.t_range[1] = float(args.t_range[1])
+    args.t_window = args.t_window.split(",")
+    assert(len(args.t_window) == 2)
+    args.t_window[0] = float(args.t_window[0])
+    args.t_window[1] = float(args.t_window[1])
 
     set_deterministic(42)
     if args.mode == 'training':
@@ -816,6 +861,11 @@ def main(args):
         supervised_loop(args)
     else:
         raise
+
+    if not args.silent:
+        for i in range(0,15):
+            subprocess.run("echo $\'\a\'", shell=True)
+            time.sleep(3)
 
 
 if __name__ == '__main__':
@@ -831,12 +881,13 @@ if __name__ == '__main__':
     parser.add_argument('--test_size', default=512, type=int) # note: this is analysis loop only (not val)
     parser.add_argument('--traj_len', default=20, type=int)
     parser.add_argument('--img_size', default=32, type=int)
+    parser.add_argument('--diff_time', default=0.5, type=float)
 
-    parser.add_argument('--gaps', default=False, action='store_true')
+    parser.add_argument('--gaps', default="-1,-1", type=str)
     parser.add_argument('--crop', default=1.0, type=float)
     parser.add_argument('--crop_c', default="-1,-1", type=str)
-    parser.add_argument('--t_window', default=-1, type=float)
-    parser.add_argument('--t_range', default="-1,-1",type=str)
+    parser.add_argument('--t_window', default="-1,-1", type=str)
+    parser.add_argument('--t_range', default=-1,type=float)
     parser.add_argument('--mink', default=0.0, type=float)
     parser.add_argument('--maxk', default=1.0, type=float)
 
@@ -855,6 +906,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_every', default=20, type=int)
     parser.add_argument('--verbose', default=False, action='store_true')
     parser.add_argument('--validation', default=False, action='store_true')
+    parser.add_argument('--silent', default=False, action='store_true')
 
     # Optimizer options
     parser.add_argument('--epochs', default=100, type=int)
