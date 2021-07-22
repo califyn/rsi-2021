@@ -18,6 +18,7 @@ fix list 2: unfolding wish list
 - [ ] kernel regression???
 - [ ] pca
 - [ ] spectral embedding
+- [ ] density
 
 fix list 3: self-sup tactics wish list
 - [x] infonce
@@ -70,3 +71,7 @@ well,it seems like the model chooses the "best" possible place to put the blank 
 does compression happen b/c of clipping? will representations get bigger if clipped weaker?
 
 mathematically does it help to increase the distance?
+
+https://www.pnas.org/content/116/19/9501 lstm for progression
+
+https://arxiv.org/pdf/2102.12525v2.pdf prior image based generative. sort of similar
