@@ -1,0 +1,319 @@
+BIG DATA LOG
+
+RUN 1 -- NO AUGMENTATIONS
+Raw spearman.
+../output/pendulum/0.pth: 0.39830664135059834
+../output/pendulum/20.pth: 0.9153244898934495
+../output/pendulum/40.pth: 0.9921726578458908
+../output/pendulum/60.pth: 0.9932897164691369
+../output/pendulum/80.pth: 0.9935796476620965
+../output/pendulum/100.pth: 0.9936549913402257
+Same testing set spearman.
+../output/pendulum/0.pth: 0.44079737820368403
+../output/pendulum/20.pth: 0.9210696253304944
+../output/pendulum/40.pth: 0.992507906405101
+../output/pendulum/60.pth: 0.9938178621751088
+../output/pendulum/80.pth: 0.9941023458551359
+../output/pendulum/100.pth: 0.9941187562517199
+Segmented spearman.
+../output/pendulum/0.pth: 0.43608771479246616
+../output/pendulum/20.pth: 0.9213124871438084
+../output/pendulum/40.pth: 0.9925349899462308
+../output/pendulum/60.pth: 0.993642925586548
+../output/pendulum/80.pth: 0.9938434338745373
+../output/pendulum/100.pth: 0.9940488079627567
+Density differences.
+[ 0.         67.98498652  0.        ]
+[0.         1.26754236 0.        ]
+[0.         0.62140017 0.        ]
+[0.         0.40724961 0.        ]
+[0.         0.39762608 0.        ]
+[0.         0.43154204 0.        ]
+
+Raw spearman.
+../output/pendulum/0.pth: 0.3952388718596695
+../output/pendulum/20.pth: 0.9619886150173437
+../output/pendulum/40.pth: 0.988832668347025
+../output/pendulum/60.pth: 0.9925689007450239
+../output/pendulum/80.pth: 0.9933879444208888
+../output/pendulum/100.pth: 0.9936214014698862
+Same testing set spearman.
+../output/pendulum/0.pth: 0.44584287364835085
+../output/pendulum/20.pth: 0.9646125438831705
+../output/pendulum/40.pth: 0.9893281749222097
+../output/pendulum/60.pth: 0.9928235283087151
+../output/pendulum/80.pth: 0.9934759617844162
+../output/pendulum/100.pth: 0.9938224652979977
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    18.138 14.915 14.694 10.13  10.108  8.918  9.444  0.   ]
+spearman
+[ 0.    -0.062  0.023  0.186  0.115  0.029  0.05  -0.068  0.   ]
+../output/pendulum/20.pth
+density
+[0.    0.215 0.252 0.356 0.376 0.382 0.427 0.989 0.   ]
+spearman
+[0.    0.784 0.576 0.556 0.62  0.43  0.282 0.205 0.   ]
+../output/pendulum/40.pth
+density
+[0.    0.146 0.291 0.326 0.568 0.538 0.54  0.849 0.   ]
+spearman
+[0.    0.923 0.847 0.759 0.681 0.669 0.62  0.605 0.   ]
+../output/pendulum/60.pth
+density
+[0.    0.194 0.329 0.386 0.401 0.433 0.421 0.387 0.   ]
+spearman
+[0.    0.943 0.862 0.804 0.764 0.719 0.685 0.721 0.   ]
+../output/pendulum/80.pth
+density
+[0.    0.167 0.289 0.34  0.367 0.405 0.39  0.367 0.   ]
+spearman
+[0.    0.947 0.875 0.829 0.783 0.732 0.689 0.774 0.   ]
+../output/pendulum/100.pth
+density
+[0.    0.168 0.271 0.341 0.383 0.393 0.412 0.381 0.   ]
+spearman
+[0.    0.948 0.878 0.83  0.791 0.739 0.708 0.767 0.   ]
+
+with noise=0.25
+Raw spearman.
+../output/pendulum/0.pth: 0.27263801145227856
+../output/pendulum/20.pth: -0.6962119516009168
+../output/pendulum/40.pth: -0.7252164373586985
+../output/pendulum/60.pth: -0.7183915612724838
+../output/pendulum/80.pth: -0.7130540940579728
+../output/pendulum/100.pth: -0.7145063626543583
+Same testing set spearman.
+../output/pendulum/0.pth: 0.30341807525165976
+../output/pendulum/20.pth: -0.7209727719976052
+../output/pendulum/40.pth: -0.7390979955507943
+../output/pendulum/60.pth: -0.739059009194241
+../output/pendulum/80.pth: -0.7322834200359218
+../output/pendulum/100.pth: -0.7338597852689185
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    15.214 14.168 13.642 13.414 12.125 10.495  9.614  0.   ]
+spearman
+[ 0.    -0.028 -0.     0.067  0.089  0.059  0.046 -0.049  0.   ]
+../output/pendulum/20.pth
+density
+[0.    0.121 0.134 0.124 0.159 0.181 0.245 0.643 0.   ]
+spearman
+[ 0.    -0.246 -0.192 -0.148 -0.142 -0.109 -0.117 -0.067  0.   ]
+../output/pendulum/40.pth
+density
+[0.    0.1   0.091 0.1   0.108 0.12  0.126 0.147 0.   ]
+spearman
+[ 0.    -0.253 -0.205 -0.161 -0.148 -0.11  -0.152 -0.281  0.   ]
+../output/pendulum/60.pth
+density
+[0.    0.096 0.096 0.1   0.105 0.106 0.122 0.175 0.   ]
+spearman
+[ 0.    -0.255 -0.209 -0.164 -0.146 -0.108 -0.155 -0.255  0.   ]
+../output/pendulum/80.pth
+density
+[0.    0.104 0.097 0.098 0.107 0.108 0.114 0.145 0.   ]
+spearman
+[ 0.    -0.246 -0.203 -0.159 -0.141 -0.105 -0.154 -0.25   0.   ]
+../output/pendulum/100.pth
+density
+[0.    0.109 0.101 0.098 0.104 0.105 0.114 0.145 0.   ]
+spearman
+[ 0.    -0.252 -0.205 -0.16  -0.142 -0.105 -0.153 -0.253  0.   ]
+
+RUN 3 -- NOISE=0.01
+
+Raw spearman.
+../output/pendulum/0.pth: 0.39931931946849114
+../output/pendulum/20.pth: -0.9488277490389875
+../output/pendulum/40.pth: -0.9883622805649969
+../output/pendulum/60.pth: -0.9922359884322663
+../output/pendulum/80.pth: -0.9934770382326454
+../output/pendulum/100.pth: -0.9936060172861902
+Same testing set spearman.
+../output/pendulum/0.pth: 0.4447408827220084
+../output/pendulum/20.pth: -0.9505105148526111
+../output/pendulum/40.pth: -0.9887861327856412
+../output/pendulum/60.pth: -0.9923798473066087
+../output/pendulum/80.pth: -0.9936724539246414
+../output/pendulum/100.pth: -0.9937897652879433
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    17.671 14.915 14.618 10.782  9.806  8.556  9.647  0.   ]
+spearman
+[ 0.    -0.076  0.044  0.167  0.139  0.034  0.051 -0.054  0.   ]
+../output/pendulum/20.pth
+density
+[0.    0.235 0.217 0.265 0.479 0.899 1.068 0.712 0.   ]
+spearman
+[ 0.    -0.591 -0.412 -0.386 -0.408 -0.441 -0.34  -0.264  0.   ]
+../output/pendulum/40.pth
+density
+[0.    0.26  0.454 0.444 0.421 0.455 0.663 0.713 0.   ]
+spearman
+[ 0.    -0.948 -0.85  -0.789 -0.749 -0.692 -0.587 -0.491  0.   ]
+../output/pendulum/60.pth
+density
+[0.    0.207 0.309 0.443 0.462 0.456 0.469 0.428 0.   ]
+spearman
+[ 0.    -0.949 -0.863 -0.793 -0.766 -0.716 -0.671 -0.755  0.   ]
+../output/pendulum/80.pth
+density
+[0.    0.188 0.289 0.348 0.385 0.438 0.449 0.452 0.   ]
+spearman
+[ 0.    -0.95  -0.876 -0.82  -0.786 -0.739 -0.696 -0.79   0.   ]
+../output/pendulum/100.pth
+density
+[0.    0.188 0.288 0.374 0.417 0.423 0.437 0.434 0.   ]
+spearman
+[ 0.    -0.95  -0.878 -0.821 -0.789 -0.736 -0.698 -0.794  0.   ]
+
+RUN 2 -- NOISE=0.05
+Raw spearman.
+../output/pendulum/0.pth: 0.39423058201232813
+../output/pendulum/20.pth: 0.8837458281897831
+../output/pendulum/40.pth: 0.9872677885135692
+../output/pendulum/60.pth: 0.9896552285064605
+../output/pendulum/80.pth: 0.9920054223079826
+../output/pendulum/100.pth: 0.9923857951555527
+Same testing set spearman.
+../output/pendulum/0.pth: 0.4666195695039058
+../output/pendulum/20.pth: 0.8844306066274115
+../output/pendulum/40.pth: 0.9888675162716032
+../output/pendulum/60.pth: 0.9907966129022714
+../output/pendulum/80.pth: 0.9927707603203103
+../output/pendulum/100.pth: 0.9930496001107688
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    17.671 14.711 15.203  9.879  9.806  9.002  9.583  0.   ]
+spearman
+[ 0.    -0.067  0.043  0.187  0.123  0.04   0.039 -0.055  0.   ]
+../output/pendulum/20.pth
+density
+[0.    0.373 0.522 1.087 1.838 2.175 0.663 0.161 0.   ]
+spearman
+[0.    0.902 0.8   0.683 0.438 0.129 0.072 0.262 0.   ]
+../output/pendulum/40.pth
+density
+[0.    0.389 0.716 0.77  0.917 0.941 0.96  0.844 0.   ]
+spearman
+[0.    0.939 0.87  0.786 0.71  0.647 0.608 0.398 0.   ]
+../output/pendulum/60.pth
+density
+[0.    0.401 0.684 0.706 0.789 0.75  0.669 0.553 0.   ]
+spearman
+[0.    0.943 0.873 0.798 0.742 0.69  0.632 0.535 0.   ]
+../output/pendulum/80.pth
+density
+[0.    0.354 0.609 0.735 0.778 0.813 0.716 0.647 0.   ]
+spearman
+[0.    0.943 0.881 0.82  0.769 0.72  0.685 0.61  0.   ]
+../output/pendulum/100.pth
+density
+[0.    0.359 0.619 0.723 0.857 0.818 0.817 0.69  0.   ]
+spearman
+[0.    0.944 0.88  0.816 0.77  0.726 0.698 0.641 0.   ]
+
+RUN 4 -- NOISE=0.1
+Raw spearman.
+../output/pendulum/0.pth: 0.3918978316529754
+../output/pendulum/20.pth: 0.9527730303062178
+../output/pendulum/40.pth: 0.9846636662006991
+../output/pendulum/60.pth: 0.9879317008359579
+../output/pendulum/80.pth: 0.9869691865432112
+../output/pendulum/100.pth: 0.9858405505657678
+Same testing set spearman.
+../output/pendulum/0.pth: 0.43855063282899504
+../output/pendulum/20.pth: 0.9526382692835583
+../output/pendulum/40.pth: 0.9845530614832697
+../output/pendulum/60.pth: 0.9882570002752951
+../output/pendulum/80.pth: 0.9877508011283449
+../output/pendulum/100.pth: 0.9866908075246874
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    17.969 14.915 14.123 10.7    9.874  9.163  8.778  0.   ]
+spearman
+[ 0.    -0.09   0.03   0.188  0.129  0.033  0.026 -0.072  0.   ]
+../output/pendulum/20.pth
+density
+[0.    0.927 0.968 0.986 0.953 0.602 0.52  0.131 0.   ]
+spearman
+[0.    0.824 0.66  0.569 0.479 0.326 0.247 0.376 0.   ]
+../output/pendulum/40.pth
+density
+[0.    0.678 0.978 1.134 1.272 1.571 1.252 0.7   0.   ]
+spearman
+[0.    0.898 0.775 0.664 0.663 0.687 0.56  0.439 0.   ]
+../output/pendulum/60.pth
+density
+[0.    0.671 1.08  1.303 1.427 1.479 1.499 1.114 0.   ]
+spearman
+[0.    0.939 0.843 0.772 0.747 0.658 0.569 0.451 0.   ]
+../output/pendulum/80.pth
+density
+[0.    0.779 1.419 1.472 1.565 1.635 1.158 0.774 0.   ]
+spearman
+[0.    0.945 0.854 0.793 0.738 0.669 0.507 0.464 0.   ]
+../output/pendulum/100.pth
+density
+[0.    0.699 1.277 1.34  1.411 1.475 1.095 0.621 0.   ]
+spearman
+[0.    0.945 0.853 0.799 0.743 0.648 0.467 0.468 0.   ]
+
+RUN 5 -- NOISE=0.25
+Raw spearman.
+../output/pendulum/0.pth: 0.39176177092516734
+../output/pendulum/20.pth: 0.06573626887057046
+../output/pendulum/40.pth: 0.9157221964192286
+../output/pendulum/60.pth: 0.9011248456113712
+../output/pendulum/80.pth: 0.9221031956504477
+../output/pendulum/100.pth: 0.914085001754538
+Same testing set spearman.
+../output/pendulum/0.pth: 0.4630426531842599
+../output/pendulum/20.pth: 0.03519109798738183
+../output/pendulum/40.pth: 0.9238606567247286
+../output/pendulum/60.pth: 0.9127479901894745
+../output/pendulum/80.pth: 0.928899236632763
+../output/pendulum/100.pth: 0.9220599694795262
+Segmented spearman.
+Density differences.
+../output/pendulum/0.pth
+density
+[ 0.    18.055 14.67  15.51  10.614 10.378  8.942  9.676  0.   ]
+spearman
+[ 0.    -0.073  0.04   0.172  0.141  0.029  0.037 -0.06   0.   ]
+../output/pendulum/20.pth
+density
+[0.    2.432 1.286 1.132 1.114 1.185 1.443 0.17  0.   ]
+spearman
+[ 0.     0.568  0.172  0.136 -0.065 -0.062 -0.17  -0.261  0.   ]
+../output/pendulum/40.pth
+density
+[0.    2.489 1.984 1.384 1.146 0.855 0.819 0.399 0.   ]
+spearman
+[0.    0.804 0.663 0.479 0.342 0.227 0.161 0.328 0.   ]
+../output/pendulum/60.pth
+density
+[0.    2.072 1.655 1.179 0.897 0.64  0.557 0.564 0.   ]
+spearman
+[0.    0.826 0.533 0.4   0.304 0.223 0.178 0.291 0.   ]
+../output/pendulum/80.pth
+density
+[0.    2.292 1.723 1.753 1.212 0.86  0.657 0.545 0.   ]
+spearman
+[0.    0.837 0.602 0.486 0.343 0.237 0.191 0.305 0.   ]
+../output/pendulum/100.pth
+density
+[0.    2.388 1.701 1.595 1.013 0.762 0.628 0.565 0.   ]
+spearman
+[0.    0.856 0.591 0.461 0.325 0.231 0.183 0.312 0.   ]
