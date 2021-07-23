@@ -911,7 +911,7 @@ def testing_loop(args, encoder=None):
         vis_q = test_q
         vis_coded = coded
 
-    if prt_time:
+    """if prt_time:
         mimic_input = np.stack((vis_k2.ravel(), vis_q[:, 0].ravel()), axis=1)
     else:
         mimic_input = np.expand_dims(vis_k2.ravel(), [1])
@@ -943,7 +943,7 @@ def testing_loop(args, encoder=None):
             shuffle_idx = torch.randperm(mimic_input.size()[0])
             b_size = int(torch.max(shuffle_idx) + 1) // 10
             m_in = mimic_input[shuffle_idx]
-            c = vis_codedT[i, shuffle_idx, :, :] 
+            c = vis_codedT[i, shuffle_idx, :, :]
             c = c[:, torch.floor(torch.rand(1) * args.traj_len).long(), :]
             if e % 10 == 0:
                 print(str(e) + ": " + str(out_loss.item()))
@@ -970,19 +970,30 @@ def testing_loop(args, encoder=None):
         plt.scatter(test_k2[:, :, 0].ravel(), coded.ravel(), s=0.5)
         inn = np.expand_dims(test_k2[:, :, 0].ravel(), [1])
         print(inn.shape)
-        outt = mimic(torch.cuda.FloatTensor(inn)).cpu().detach().numpy() 
+        outt = mimic(torch.cuda.FloatTensor(inn)).cpu().detach().numpy()
         print(outt.shape)
         plt.scatter(test_k2[:, :, 0].ravel(), outt.ravel(), s=0.5)
         plt.show()
 
-    ## Density computation
+    if prt_time:
+        lin_k = np.linspace(data_args['mink'], data_args['maxk'], args.density)
+        lin = []
+        for i in range(0, args.density):
+            lin.append(np.linspace(-1 * np.arccos(1 - 2 * lin_k[i]), np.arccos(1 - 2 * lin_k[i]), args.density))
+        lin = np.array(lin)
+
+        # sampling
+
+    else:"""
+
+    """## Density computation
     densities = []
 
     for i in range(len(b)):
         den_size = args.data_size // 16
         if prt_time:
             uniform_q = np.linspace(np.min(test_q), np.max(test_q), den_size)
-            uniform_k2 = nplinspace(np.min(test_k2), np.max(test_k2), den_size)
+            uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size)
 
             uniform_q = np.reshape(uniform_q, (den_size, 1))
             uniform_k2 = np.reshape(uniform_k2, (1, den_size))
@@ -1018,7 +1029,7 @@ def testing_loop(args, encoder=None):
         torch.save(den, os.path.join(args.path_dir, f'{e}_den.pth'))
         densities.append(den)
     densities = [t.cpu().detach().numpy() for t in densities]
-    densities = np.array(densities)
+    densities = np.array(densities)"""
 
     # Spearman
     print("Raw spearman.")
@@ -1050,9 +1061,9 @@ def testing_loop(args, encoder=None):
             print(load_files[i] + ": " + str(stats.spearmanr(out.ravel(), exact_k2[:, :, 0].ravel()).correlation))
 
     if prt_energy:
-        den_size = args.data_size // 16
+        """den_size = args.data_size // 16
         uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size).tolist()
-        uniform_k2 = uniform_k2[1:-1]
+        uniform_k2 = uniform_k2[1:-1]"""
 
         num_gaps = data_args['gaps'][0]
         if num_gaps == -1:
@@ -1065,7 +1076,7 @@ def testing_loop(args, encoder=None):
             gap_width = gap_width * (maxk - mink)
             btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
         else:
-            btwn_width = 1.0 
+            btwn_width = 1.0
         btwn_width = btwn_width * (maxk - mink)
 
         borders = [mink]
@@ -1076,11 +1087,11 @@ def testing_loop(args, encoder=None):
         borders.append(borders[-1] + btwn_width)
         borders.append(maxk)
 
-        combined = []
+        combined = np.zeros((len(b), len(borders)))
 
         print("Segmented spearman.")
         for i in range(0, len(borders)):
-            store = []
+            """store = []
             for it, k in reversed(list(enumerate(uniform_k2))):
                 if k < borders[i]:
                     if prt_time:
@@ -1090,10 +1101,10 @@ def testing_loop(args, encoder=None):
 
                     store.append(to_append)
                     uniform_k2.pop(it)
-            store = np.array(store)
-            if np.size(store) > 1:
-                store = np.median(store, axis=0)
-
+            store = np.array(store)"""
+            #if np.size(store) > 1:
+            if (i != 0 and i != len(borders) - 1) or (i == 0 and mink != 0) or (i == len(borders) - 1 and maxk != 1):
+                #store = np.median(store, axis=0)
                 s_energy, s_data, s_q = pendulum_train_gen(data_size=args.data_size, noise=args.noise, traj_samples=1,
                     mink=(0 if i == 0 else borders[i - 1]), maxk=borders[i], uniform=True, img_size=data_args['img_size'],
                     diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
@@ -1106,7 +1117,17 @@ def testing_loop(args, encoder=None):
                     out = b[j](s_data[:, 0, :, :, :])
                     out = out.cpu().detach().numpy()
                     print(load_files[j] + ": " + str(stats.spearmanr(out.ravel(), s_energy[:, :, 0].ravel()).correlation))
-            combined.append(list(store))
+
+                    combined[j][i] = 1.0 / (np.quantile(out, 0.75) - np.quantile(out, 0.25))
+                    if i == 0:
+                        combined[j][i] = combined[j][i] * mink
+                    elif i == len(borders) - 1:
+                        combined[j][i] = combined[j][i] * (1 - maxk)
+                    elif i % 2 == 1:
+                        combined[j][i] = combined[j][i] * btwn_width
+                    elif i % 2 == 0:
+                        combined[j][i] = combined[j][i] * gap_width
+            #combined.append(list(store))
 
         print("Density differences.")
         for i in range(0, len(b)):
@@ -1166,6 +1187,7 @@ if __name__ == '__main__':
 
     # Data generation options
     parser.add_argument('--data_size', default=5120, type=int)
+    parser.add_argument('--density', default=1000, type=int)
     parser.add_argument('--traj_len', default=20, type=int)
     parser.add_argument('--img_size', default=32, type=int)
     parser.add_argument('--diff_time', default=0.5, type=float)
