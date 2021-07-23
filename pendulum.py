@@ -14,6 +14,7 @@ import statistics
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import ellipj
+from scipy import stats
 
 # torch
 import torch
@@ -136,7 +137,7 @@ def info_nce(z1, z2, temperature=0.1, distance="cosine"):
 def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
         shuffle=True, check_energy=False, k2=None, image=True,
         blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False,
-        gaps=[-1,-1], crop=1.0, crop_c=[-1,-1], t_window=-1, t_range=-1, mink=0, maxk=1):
+        gaps=[-1,-1], crop=1.0, crop_c=[-1,-1], t_window=[-1,-1], t_range=-1, mink=0, maxk=1):
     """
     pendulum dataset generation
     :param data_size: number of pendulums
@@ -299,7 +300,6 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
 
         if verbose:
             print("[Dataset] Color indices computed")
-
         if crop == 1.0:
             pxls[idx_final[0], idx_final[1], idx_final[2] + 1, idx_final[3] + 1, idx_final[4]] = 0
         else:
@@ -339,7 +339,7 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
                 #plt.clf()"""
 
         pxls = np.swapaxes(pxls, 4, 2)
-        return np.broadcast(k2, q)[0], pxls, q
+        return np.broadcast_arrays(k2, q)[0], pxls, q
 
 
 class PendulumNumericalDataset(torch.utils.data.Dataset):
@@ -376,6 +376,7 @@ class PendulumImageDataset(torch.utils.data.Dataset):
                                                 t_window=t_window, t_range=t_range, mink=mink, maxk=maxk)
         self.trajectory_length = trajectory_length
         self.full = full_out
+        self.size = size
 
     def __getitem__(self, idx):
         if not self.full:
@@ -452,19 +453,25 @@ class PredictionMLP(nn.Module):
         return self.net(x)
 
 class EncodingMLP(nn.Module):
-    def __init__(self, in_dim):
+    def __init__(self, in_dim, out_dim):
         super().__init__()
+        hidden_dim=32
         self.net = nn.Sequential(
-            nn.Linear(in_dim, 8),
+            nn.Linear(in_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(8, 8),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(8, 1)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, out_dim),
         )
 
     def forward(self, x):
         return self.net(x)
-
 
 class Branch(nn.Module):
     #def __init__(self, proj_dim, proj_hidden, deeper, affine, encoder=None, resnet=True):
@@ -784,7 +791,7 @@ def training_loop(args, encoder=None):
                                 "repr_dim": args.repr_dim
                             }
                 with open(os.path.join(args.path_dir, f'{e}.args'), 'wb') as fp:
-                    pickle.dump(itemlist, fp)
+                    pickle.dump(data_args, fp)
                 print("[saved]")
 
     file_to_update.close()
@@ -817,7 +824,7 @@ def testing_loop(args, encoder=None):
     data_args = {}
 
     for load_file in load_files:
-        with open(os.path.join(args.path_dir, load_file[:-3] + ".args"), 'rb') as fp:
+        with open(load_file[:-4] + ".args", 'rb') as fp:
             new_data_args = pickle.load(fp)
             if data_args == {}:
                 data_args = new_data_args
@@ -844,20 +851,25 @@ def testing_loop(args, encoder=None):
         #crop_c = args.crop_c, t_window=args.t_window,t_range=args.t_range,
         #mink=args.mink, maxk=args.max)
     test_k2, test_data, test_q = pendulum_train_gen(data_size=args.data_size,
-        traj_samples=(args.traj_len if args.sparse_testing else 1),
-        noise=args.noise, uniform=(not args.sparse_testing), img_size=data_args['img_size'],
+        traj_samples=args.traj_len,
+        noise=args.noise, uniform=True, img_size=data_args['img_size'],
         diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
 
     if verbose:
         print("[testing] Completed data loading")
 
-    coded = np.zeros((len(b), args.data_size, args.traj_len if args.sparse_testing else 1, args.repr_dim))
+    coded = np.zeros((len(b), args.data_size, args.traj_len, data_args["repr_dim"]))
 
-    for i in range(len(b)):
-        for j in range(0, args.data_size):
-            coded[i, j, :, :] = b[i](test_data[j, :, :, :, :]).cpu().detach().numpy()
-    energies = test_energy.cpu().detach().numpy()
-    qs = test_q[:, 0].cpu().detach().numpy()
+    if torch.cuda.is_available():
+        for i in range(len(b)):
+            for j in range(0, args.data_size):
+                coded[i, j, :, :] = b[i](torch.FloatTensor(test_data[j, :, :, :, :]).cuda()).cpu().detach().numpy()
+    else:
+        for i in range(len(b)):
+            for j in range(0, args.data_size):
+                coded[i, j, :, :] = b[i](torch.FloatTensor(test_data[j, :, :, :, :])).detach().numpy()
+    energies = test_k2[:, 0]
+    qs = test_q[:, 0]
 
     os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
     for idx, load_file in enumerate(load_files):
@@ -874,25 +886,6 @@ def testing_loop(args, encoder=None):
     prt_image = data_args['crop'] != 1.0
     prt_time = data_args['t_window'] != [-1, -1] or data_args['t_range'] != -1
     prt_energy = data_args['gaps'] != [-1, -1] or data_args['mink'] != 0 or data_args['maxk'] != 0
-
-    datashape = list(test_data.shape)
-    datashape[0] = datashape[0] * datashape[1]
-    datashape.pop(1)
-
-    slim_data = np.reshape(test_data, tuple(datashape))
-
-    k2qshape = list(test_k2.shape)
-    k2qshape[0] = k2qshape[0] * k2qshape[1]
-    k2qshape.pop(1)
-
-    slim_k2 = np.reshape(test_k2, tuple(k2qshape))
-    slim_q = np.reshape(test_q, tuple(k2qshape))
-
-    cshape = list(coded.shape)
-    cshape[1] = cshape[1] * cshape[2]
-    cshape.pop(2)
-
-    slim_coded = np.reshape(coded, cshape)
 
     ## NN modeling
     if prt_image and not prt_time:
@@ -913,63 +906,98 @@ def testing_loop(args, encoder=None):
         vis_q = slim_q[visible == 1, ...]
         vis_coded = slim_coded[:, visible == 1, ...]
     else:
-        vis_data = slim_data
-        vis_k2 = slim_k2
-        vis_q = slim_q
-        vis_coded = slim_coded
+        vis_data = test_data
+        vis_k2 = test_k2[:, 0, 0]
+        vis_q = test_q
+        vis_coded = coded
 
     if prt_time:
-        mimic_input = np.stack((vis_k2.flat, vis_q.flat), axis=0)
+        mimic_input = np.stack((vis_k2.ravel(), vis_q[:, 0].ravel()), axis=1)
     else:
-        mimic_input = vis_k2.flat
+        mimic_input = np.expand_dims(vis_k2.ravel(), [1])
+
+    mimic_input = torch.FloatTensor(mimic_input)
+    vis_codedT = torch.FloatTensor(vis_coded)
+    if torch.cuda.is_available():
+        mimic_input = mimic_input.cuda()
+        vis_codedT = vis_codedT.cuda()
 
     mimics = []
     for i in range(len(b)):
         if prt_time:
-            mimic = EncodingMLP(2)
+            mimic = EncodingMLP(2, data_args['repr_dim'])
         else:
-            mimic = EncodingMLP(1)
+            mimic = EncodingMLP(1, data_args['repr_dim'])
 
         if torch.cuda.is_available():
             mimic.cuda()
 
-        optimizer = torch.optim.Adam(
+        optimizer = torch.optim.SGD(
             mimic.parameters(),
+            momentum=0.9,
+            lr=args.lr,
             weight_decay=args.wd
         )
         loss = torch.nn.MSELoss()
         for e in range(1, args.epochs + 1):
+            shuffle_idx = torch.randperm(mimic_input.size()[0])
+            b_size = int(torch.max(shuffle_idx) + 1) // 10
+            m_in = mimic_input[shuffle_idx]
+            c = vis_codedT[i, shuffle_idx, :, :] 
+            c = c[:, torch.floor(torch.rand(1) * args.traj_len).long(), :]
+            if e % 10 == 0:
+                print(str(e) + ": " + str(out_loss.item()))
+
             mimic.train()
-            mimic.zero_grad()
+            for t in range(0, 10):
+                optimizer.zero_grad()
 
-            z = mimic(mimic_input)
-            out_loss = loss(z, b[i](vis_data))
-            print(out_loss.item())
+                z = mimic(m_in[b_size * t:b_size * (t + 1)])
+                out_loss = loss(z, c[b_size * t:b_size * (t + 1)])
+                print(out_loss.item())
+                print(z[0])
+                print(m_in[b_size * t])
+                print(c[b_size * t])
+                print(stats.spearmanr(m_in[b_size * t:b_size * (t + 1)].cpu().detach().numpy().ravel(), c[b_size * t:b_size * (t + 1)].cpu().detach().numpy().ravel()).correlation)
 
-            out_loss.backward()
-            optimizer.step()
-        torch.save(dict(state_dict=mimic.state_dict()), os.path.join(args.path_dir, f'{e}_map.pth'))
+                out_loss.backward()
+                optimizer.step()
+        torch.save(dict(state_dict=mimic.state_dict()), '{load_files[i][:-4]}_map.pth')
         mimics.append(mimic)
+        mimic.eval()
+        print(test_k2.shape)
+        print(coded.shape)
+        plt.scatter(test_k2[:, :, 0].ravel(), coded.ravel(), s=0.5)
+        inn = np.expand_dims(test_k2[:, :, 0].ravel(), [1])
+        print(inn.shape)
+        outt = mimic(torch.cuda.FloatTensor(inn)).cpu().detach().numpy() 
+        print(outt.shape)
+        plt.scatter(test_k2[:, :, 0].ravel(), outt.ravel(), s=0.5)
+        plt.show()
 
     ## Density computation
     densities = []
 
     for i in range(len(b)):
-        den_size = data_size / 16
+        den_size = args.data_size // 16
         if prt_time:
-            uniform_q = torch.linspace(torch.min(test_q), torch.max(test_q), den_size)
-            uniform_k2 = torch.linspace(torch.min(test_k2), torch.max(test_k2), den_size)
+            uniform_q = np.linspace(np.min(test_q), np.max(test_q), den_size)
+            uniform_k2 = nplinspace(np.min(test_k2), np.max(test_k2), den_size)
 
-            uniform_q = torch.reshape(uniform_q, (den_size, 1))
-            uniform_k2 = torch.reshape(uniform_k2, (1, den_size))
+            uniform_q = np.reshape(uniform_q, (den_size, 1))
+            uniform_k2 = np.reshape(uniform_k2, (1, den_size))
             uniform_q = uniform_q.repeat(1, den_size)
             uniform_k2 = uniform_k2.repeat(den_size, 1)
 
             den_in = torch.stack((uniform_q, uniform_k2), dim=2)
             den_in = torch.reshape(den_in, (den_size**2, 2))
         else:
-            uniform_k2 = torch.linspace(torch.min(test_k2), torch.max(test_k2), den_size)
-            den_in = torch.reshape(uniform_k2, (den_size, 1))
+            uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size)
+            den_in = np.reshape(uniform_k2, (den_size, 1))
+
+        den_in = torch.FloatTensor(den_in)
+        if torch.cuda.is_available():
+            den_in = den_in.cuda()
 
         mimic.eval()
         x = mimic(den_in)
@@ -989,17 +1017,19 @@ def testing_loop(args, encoder=None):
 
         torch.save(den, os.path.join(args.path_dir, f'{e}_den.pth'))
         densities.append(den)
-    densities = torch.tensor(densities).cuda()
+    densities = [t.cpu().detach().numpy() for t in densities]
+    densities = np.array(densities)
 
     # Spearman
     print("Raw spearman.")
     for i in range(0, len(b)):
-        print(load_files[i] + ": " + str(stats.spearmanr(coded[i], energies).correlation))
+        _, energies_b = np.broadcast_arrays(coded[i], np.expand_dims(energies[:, 0], [1, 2]))
+        print(load_files[i] + ": " + str(stats.spearmanr(coded[i].ravel(), energies_b.ravel()).correlation))
 
     if prt_image:
         print("Visible spearman.")
         for i in range(0, len(b)):
-            print(load_files[i] + ": " + str(stats.spearmanr(vis_coded[i], vis_k2).correlation))
+            print(load_files[i] + ": " + str(stats.spearmanr(vis_coded[i].ravel(), vis_k2[:, 0].ravel()).correlation))
 
     if prt_time or prt_energy:
         print("Same testing set spearman.")
@@ -1009,14 +1039,19 @@ def testing_loop(args, encoder=None):
             crop=data_args['crop'],crop_c = data_args['crop_c'],
             t_window=data_args['t_window'],t_range=data_args['t_range'],
             mink=data_args['mink'], maxk=data_args['maxk'])
+        exact_data = torch.FloatTensor(exact_data)
+        if torch.cuda.is_available():
+            exact_data = exact_data.cuda()
+
         for i in range(0, len(b)):
             b[i].eval()
-            out = b[i](exact_data)
-            print(load_files[i] + ": " + str(stats.spearmanr(out, exact_k2).correlation))
+            out = b[i](exact_data[:, 0, ...])
+            out = out.cpu().detach().numpy()
+            print(load_files[i] + ": " + str(stats.spearmanr(out.ravel(), exact_k2[:, :, 0].ravel()).correlation))
 
     if prt_energy:
-        den_size = data_size / 16
-        uniform_k2 = torch.linspace(torch.min(test_k2), torch.max(test_k2), den_size).tolist()
+        den_size = args.data_size // 16
+        uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size).tolist()
         uniform_k2 = uniform_k2[1:-1]
 
         num_gaps = data_args['gaps'][0]
@@ -1025,9 +1060,12 @@ def testing_loop(args, encoder=None):
         mink = data_args['mink']
         maxk = data_args['maxk']
 
-        gap_width = data_args['gaps'][1] / num_gaps
-        btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
-        gap_width = gap_width * (maxk - mink)
+        if num_gaps > 0:
+            gap_width = data_args['gaps'][1] / num_gaps
+            gap_width = gap_width * (maxk - mink)
+            btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
+        else:
+            btwn_width = 1.0 
         btwn_width = btwn_width * (maxk - mink)
 
         borders = [mink]
@@ -1046,30 +1084,34 @@ def testing_loop(args, encoder=None):
             for it, k in reversed(list(enumerate(uniform_k2))):
                 if k < borders[i]:
                     if prt_time:
-                        to_append = torch.median(densities[:, it, :])
+                        to_append = np.median(densities[:, it, :], axis=2)
                     else:
                         to_append = densities[:, it]
 
-                    store.append(combined)
+                    store.append(to_append)
                     uniform_k2.pop(it)
-            store = torch.tensor(store).transpose(0, 1)
-            store = torch.median(store)
-            combined.append(store)
+            store = np.array(store)
+            if np.size(store) > 1:
+                store = np.median(store, axis=0)
 
-            s_energy, s_data, s_q = pendulum_train_gen(data_size=args.data_size, noise=args.noise,
-                mink=0 if i == 0 else borders[i - 1], maxk=borders[i], uniform=True, img_size=data_args['img_size'],
-                diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
-            for j in range(0, len(b)):
-                b[j].eval()
-                out = b[j](s_data)
-                print(load_files[j] + ": " + str(stats.spearmanr(out, s_data).correlation))
+                s_energy, s_data, s_q = pendulum_train_gen(data_size=args.data_size, noise=args.noise, traj_samples=1,
+                    mink=(0 if i == 0 else borders[i - 1]), maxk=borders[i], uniform=True, img_size=data_args['img_size'],
+                    diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
+                s_data = torch.FloatTensor(s_data)
+                if torch.cuda.is_available():
+                    s_data = s_data.cuda()
 
-        combined = torch.tensor(store)
+                for j in range(0, len(b)):
+                    b[j].eval()
+                    out = b[j](s_data[:, 0, :, :, :])
+                    out = out.cpu().detach().numpy()
+                    print(load_files[j] + ": " + str(stats.spearmanr(out.ravel(), s_energy[:, :, 0].ravel()).correlation))
+            combined.append(list(store))
 
         print("Density differences.")
         for i in range(0, len(b)):
             if verbose:
-                print(combined[i].item())
+                print(combined[i])
 
             with open(os.path.join(args.path_dir, f'{e}_avgden'), 'wb') as fp:
                 pickle.dump(combined[i], fp)
@@ -1144,7 +1186,6 @@ if __name__ == '__main__':
     parser.add_argument('--load_file', default='recent', type=str)
     parser.add_argument('--load_every', default='-1', type=int)
     parser.add_argument('--load_max', default=1000000, type=int)
-    parser.add_argument('--sparse_testing', default=False, action='store_true')
 
     # Training reporting options
     parser.add_argument('--progress_every', default=5, type=int)
