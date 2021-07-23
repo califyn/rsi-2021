@@ -886,7 +886,51 @@ def testing_loop(args, encoder=None):
     np.save(os.path.join(args.path_dir, "testing/qs.npy"), qs)
 
     if verbose:
-        print("[testing] Testing data saved... beginning analysis")
+        print("[testing] Testing data saved.")
+
+
+def analysis_loop(args, encoder=None):
+    global verbose
+
+    load_files = args.load_file
+    if args.load_every != -1:
+        load_files = []
+        idx = 0
+        while 1 + 1 == 2 and idx * args.load_every <= args.load_max:
+            file_to_add = os.path.join(args.path_dir, str(idx * args.load_every) + ".pth")
+            if os.path.isfile(file_to_add):
+                load_files.append(file_to_add)
+                idx = idx + 1
+            else:
+                break
+    elif load_files == "recent":
+        load_files = [most_recent_file(args.path_dir, ext=".pth")]
+    else:
+        load_files = os.path.join(args.path_dir, load_files)
+        load_files = [load_files]
+
+    b = []
+    data_args = {}
+
+    for load_file in load_files:
+        with open(load_file[:-4] + ".args", 'rb') as fp:
+            new_data_args = pickle.load(fp)
+            if data_args == {}:
+                data_args = new_data_args
+            else:
+                assert(data_args == new_data_args)
+
+        branch = Branch(data_args['repr_dim'], deeper=args.deeper, affine=args.affine, encoder=encoder)
+        branch.load_state_dict(torch.load(load_file)["state_dict"])
+
+        if torch.cuda.is_available():
+            branch.cuda()
+
+        branch.eval()
+        b.append(branch.encoder)
+
+    if verbose:
+        print("[analysis] Completed model loading")
 
     # Analysis: NN modeling, density, spearman, line optimality
 
@@ -894,318 +938,156 @@ def testing_loop(args, encoder=None):
     prt_time = data_args['t_window'] != [-1, -1] or data_args['t_range'] != -1
     prt_energy = data_args['gaps'] != [-1, -1] or data_args['mink'] != 0 or data_args['maxk'] != 0
 
-    ## NN modeling
-    if prt_image and not prt_time:
-        red_visible = slim_data[:, :, :, 0]
+    def slim(arr):
+        shape = list(arr.shape)
+        shape[0] = shape[0] * shape[1]
+        shape.pop(1)
+        return np.reshape(arr, tuple(shape))
+
+    def segment_analysis(borders, data, k2, print=True):
+        k2 = k2.ravel()
+        idx = np.searchsorted(borders, k2).ravel()
+
+        density = np.zeros((len(b), borders))
+        spearman = np.zeros((len(b), borders))
+        full_sm = np.zeros((len(b)))
+
+        data = torch.FloatTensor(data)
+        if torch.cuda.is_available():
+            data = data.cuda()
+
+        lens = [borders[0]] + (borders[1:] - borders[0:]).tolist
+        lens = np.array(lens)
+
+        for i in range(0, len(b)):
+            out = b[i](data)
+            out = out.cpu().detach().numpy()
+
+            full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
+
+            for j in range(0, len(borders)):
+                seg_out = out[idx == j]
+                seg_k2 = k2[idx == j]
+
+                spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+
+        if print:
+            file_names = []
+            for i in range(0, len(b)):
+                file_name = load_files[i][:-4]
+                file_name = file_name[file_name.rfind('/') + 1:]
+                file_names.append(file_name)
+
+            print("density")
+            for i in range(0, len(b)):
+                print(file_names[i] + " " + str(density[i].tolist))
+            print("")
+            print("spearman")
+            for i in range(0, len(b)):
+                print(file_names[i] + " " + str(full_sm[i])+ " " + str(spearman[i].tolist))
+            return
+        else:
+            return full_sm, density, spearman
+
+    print("same")
+    same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+        noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
+        diff_time=data_args['diff_time'], gaps=data_args['gaps'],
+        crop=data_args['crop'],crop_c = data_args['crop_c'],
+        t_window=data_args['t_window'],t_range=data_args['t_range'],
+        mink=data_args['mink'], maxk=data_args['maxk'])
+
+    same_k2 = slim(same_k2)
+    same_data = slim(same_data)
+
+    num_gaps = data_args['gaps'][0]
+    if num_gaps == -1:
+        num_gaps = 0
+
+    if num_gaps > 0:
+        gap_width = data_args['gaps'][1] / num_gaps
+        gap_width = gap_width * (data_args['maxk'] - data_args['mink'])
+        btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
+    else:
+        btwn_width = 1/7
+        gap_width = 1/7
+        num_gaps = 3
+    btwn_width = btwn_width * (data_args['maxk'] - data_args['mink'])
+
+    borders = [data_args['mink']]
+
+    for i in range(0, num_gaps):
+        borders.append(borders[-1] + btwn_width)
+        borders.append(borders[-1] + gap_width)
+    borders.append(borders[-1] + btwn_width)
+    borders.append(data_args['maxk'])
+
+    segment_analysis(borders, same_data, same_k2)
+
+    if prt_image:
+        print("visible only")
+        red_visible = same_data[:, :, :, 0]
         red_visible = np.reshape(red_visible, (np.size(red_visible, axis=0), -1))
         red_visible = np.sum(1 - np.floor(red_visible * 2), axis=2)
         red_visible = np.where(red_visible < 9, 0, 1)
 
-        blue_visible = slim_data[:, :, :, 2]
+        blue_visible = same_data[:, :, :, 2]
         blue_visible = np.reshape(blue_visible, (np.size(blue_visible, axis=0), -1))
         blue_visible = np.sum(1 - np.floor(blue_visible * 2), axis=2)
         blue_visible = np.where(blue_visible < 9, 0, 1)
 
         visible = red_visible * blue_visible
 
-        vis_data = slim_data[visible == 1, ...]
-        vis_k2 = slim_k2[visible == 1, ...]
-        vis_q = slim_q[visible == 1, ...]
-        vis_coded = slim_coded[:, visible == 1, ...]
-    else:
-        vis_data = test_data
-        vis_k2 = test_k2[:, 0, 0]
-        vis_q = test_q
-        vis_coded = coded
+        vis_data = same_data[visible == 1, ...]
+        vis_k2 = same_k2[visible == 1, ...]
 
-    """if prt_time:
-        mimic_input = np.stack((vis_k2.ravel(), vis_q[:, 0].ravel()), axis=1)
-    else:
-        mimic_input = np.expand_dims(vis_k2.ravel(), [1])
-
-    mimic_input = torch.FloatTensor(mimic_input)
-    vis_codedT = torch.FloatTensor(vis_coded)
-    if torch.cuda.is_available():
-        mimic_input = mimic_input.cuda()
-        vis_codedT = vis_codedT.cuda()
-
-    mimics = []
-    for i in range(len(b)):
-        if prt_time:
-            mimic = EncodingMLP(2, data_args['repr_dim'])
-        else:
-            mimic = EncodingMLP(1, data_args['repr_dim'])
-
-        if torch.cuda.is_available():
-            mimic.cuda()
-
-        optimizer = torch.optim.SGD(
-            mimic.parameters(),
-            momentum=0.9,
-            lr=args.lr,
-            weight_decay=args.wd
-        )
-        loss = torch.nn.MSELoss()
-        for e in range(1, args.epochs + 1):
-            shuffle_idx = torch.randperm(mimic_input.size()[0])
-            b_size = int(torch.max(shuffle_idx) + 1) // 10
-            m_in = mimic_input[shuffle_idx]
-            c = vis_codedT[i, shuffle_idx, :, :]
-            c = c[:, torch.floor(torch.rand(1) * args.traj_len).long(), :]
-            if e % 10 == 0:
-                print(str(e) + ": " + str(out_loss.item()))
-
-            mimic.train()
-            for t in range(0, 10):
-                optimizer.zero_grad()
-
-                z = mimic(m_in[b_size * t:b_size * (t + 1)])
-                out_loss = loss(z, c[b_size * t:b_size * (t + 1)])
-                print(out_loss.item())
-                print(z[0])
-                print(m_in[b_size * t])
-                print(c[b_size * t])
-                print(stats.spearmanr(m_in[b_size * t:b_size * (t + 1)].cpu().detach().numpy().ravel(), c[b_size * t:b_size * (t + 1)].cpu().detach().numpy().ravel()).correlation)
-
-                out_loss.backward()
-                optimizer.step()
-        torch.save(dict(state_dict=mimic.state_dict()), '{load_files[i][:-4]}_map.pth')
-        mimics.append(mimic)
-        mimic.eval()
-        print(test_k2.shape)
-        print(coded.shape)
-        plt.scatter(test_k2[:, :, 0].ravel(), coded.ravel(), s=0.5)
-        inn = np.expand_dims(test_k2[:, :, 0].ravel(), [1])
-        print(inn.shape)
-        outt = mimic(torch.cuda.FloatTensor(inn)).cpu().detach().numpy()
-        print(outt.shape)
-        plt.scatter(test_k2[:, :, 0].ravel(), outt.ravel(), s=0.5)
-        plt.show()
+        segment_analysis(borders, vis_data, vis_k2)
 
     if prt_time:
-        lin_k = np.linspace(data_args['mink'], data_args['maxk'], args.density)
-        lin = []
-        for i in range(0, args.density):
-            lin.append(np.linspace(-1 * np.arccos(1 - 2 * lin_k[i]), np.arccos(1 - 2 * lin_k[i]), args.density))
-        lin = np.array(lin)
+        print("all times")
+        all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+            noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
+            diff_time=data_args['diff_time'], gaps=data_args['gaps'],
+            crop=data_args['crop'],crop_c = data_args['crop_c'],
+            t_window=[-1,-1],t_range=-1,
+            mink=data_args['mink'], maxk=data_args['maxk'])
 
-        # sampling
+        all_k2 = slim(all_k2)
+        all_data = slim(all_data)
 
-    else:"""
-
-    """## Density computation
-    densities = []
-
-    for i in range(len(b)):
-        den_size = args.data_size // 16
-        if prt_time:
-            uniform_q = np.linspace(np.min(test_q), np.max(test_q), den_size)
-            uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size)
-
-            uniform_q = np.reshape(uniform_q, (den_size, 1))
-            uniform_k2 = np.reshape(uniform_k2, (1, den_size))
-            uniform_q = uniform_q.repeat(1, den_size)
-            uniform_k2 = uniform_k2.repeat(den_size, 1)
-
-            den_in = torch.stack((uniform_q, uniform_k2), dim=2)
-            den_in = torch.reshape(den_in, (den_size**2, 2))
-        else:
-            uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size)
-            den_in = np.reshape(uniform_k2, (den_size, 1))
-
-        den_in = torch.FloatTensor(den_in)
-        if torch.cuda.is_available():
-            den_in = den_in.cuda()
-
-        mimic.eval()
-        x = mimic(den_in)
-
-        if prt_time:
-            x = torch.reshape(x, (den_size, den_size))
-
-        if prt_time:
-            den = (1 / torch.abs(x[2:,1:-1] - x[1:-1,1:-1]) +
-                1 / torch.abs(x[:-2,1:-1] - x[1:-1,1:-1]) +
-                1 / torch.abs(x[1:-1,2:] - x[1:-1,1:-1]) +
-                1 / torch.abs(x[1:-1,:-2] - x[1:-1,1:-1]))
-            den = 0.25 * den
-        else:
-            den = 1 / torch.abs(x[2:] - x[1:-1]) + 1 / torch.abs(x[:-2] - x[1:-1])
-            den = 0.5 * den
-
-        torch.save(den, os.path.join(args.path_dir, f'{e}_den.pth'))
-        densities.append(den)
-    densities = [t.cpu().detach().numpy() for t in densities]
-    densities = np.array(densities)"""
-
-    # Spearman
-    print("Raw spearman.")
-    raw_spearman = []
-    for i in range(0, len(b)):
-        _, energies_b = np.broadcast_arrays(coded[i], np.expand_dims(energies[:, 0], [1, 2]))
-        raw_spearman.append(stats.spearmanr(coded[i].ravel(), energies_b.ravel()).correlation)
-        #print(load_files[i] + ": " + str(raw_spearman[i]))
-
-    if prt_image:
-        print("Visible spearman.")
-        vis_spearman = []
-        for i in range(0, len(b)):
-            vis_spearman.append(stats.spearmanr(vis_coded[i].ravel(), vis_k2[:, 0].ravel()).correlation)
-            #print(load_files[i] + ": " + str(vis_spearman[i]))
-
-    print("Same testing set spearman.")
-    old_verbose = verbose
-    verbose = False
-    exact_k2, exact_data, exact_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-        noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
-        diff_time=data_args['diff_time'], gaps=data_args['gaps'],
-        crop=data_args['crop'],crop_c = data_args['crop_c'],
-        t_window=data_args['t_window'],t_range=data_args['t_range'],
-        mink=data_args['mink'], maxk=data_args['maxk'])
-    verbose = old_verbose
-    exact_data = torch.FloatTensor(exact_data)
-    if torch.cuda.is_available():
-        exact_data = exact_data.cuda()
-    
-    same_spearman = []
-    for i in range(0, len(b)):
-        b[i].eval()
-        out = b[i](exact_data[:, 0, ...])
-        out = out.cpu().detach().numpy()
-        same_spearman.append(stats.spearmanr(out.ravel(), exact_k2[:, :, 0].ravel()).correlation)
-        #print(load_files[i] + ": " + str(same_spearman[i]))
+        segment_analysis(borders, all_data, all_k2)
 
     if prt_energy:
-        """den_size = args.data_size // 16
-        uniform_k2 = np.linspace(np.min(test_k2), np.max(test_k2), den_size).tolist()
-        uniform_k2 = uniform_k2[1:-1]"""
+        print("all energies")
+        all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+            noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
+            diff_time=data_args['diff_time'], gaps=[-1,-1],
+            crop=data_args['crop'],crop_c = data_args['crop_c'],
+            t_window=data_args['t_window'],t_range=data_args['t_range'],
+            mink=data_args['mink'], maxk=data_args['maxk'])
 
-        num_gaps = data_args['gaps'][0]
-        if num_gaps == -1:
-            num_gaps = 0
-        mink = data_args['mink']
-        maxk = data_args['maxk']
+        all_k2 = slim(all_k2)
+        all_data = slim(all_data)
 
-        if num_gaps > 0:
-            gap_width = data_args['gaps'][1] / num_gaps
-            gap_width = gap_width * (maxk - mink)
-            btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
-        else:
-            btwn_width = 1/7
-            gap_width = 1/7
-            num_gaps=3
-        btwn_width = btwn_width - 0.000001
-        gap_width = gap_width - 0.000001
-        btwn_width = btwn_width * (maxk - mink)
+        new_borders = [1/7, 2/7, 3/7, 4/7, 5/7, 6/7, 1]
+        new_borders = new_borders * (data_args['maxk'] - data_args['mink']) + data_args['mink']
 
-        borders = [mink]
+        segment_analysis(new_borders, all_data, all_k2)
 
-        for i in range(0, num_gaps):
-            borders.append(borders[-1] + btwn_width)
-            borders.append(borders[-1] + gap_width)
-        borders.append(borders[-1] + btwn_width)
-        borders.append(maxk)
+    if args.noise != data_args['noise']:
+        print("args-specified noise")
+        noise_k2, noise_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+            noise=args.noise,uniform=True,img_size=data_args['img_size'],
+            diff_time=data_args['diff_time'], gaps=data_args['gaps'],
+            crop=data_args['crop'],crop_c = data_args['crop_c'],
+            t_window=data_args['t_window'],t_range=data_args['t_range'],
+            mink=data_args['mink'], maxk=data_args['maxk'])
 
-        combined = np.zeros((len(b), len(borders)))
-        spearman = np.zeros((len(b), len(borders)))
-        same_combined = np.zeros((len(b), len(borders)))
-        same_spearman = np.zeros((len(b), len(borders)))
+        noise_k2 = slim(noise_k2)
+        noise_data = slim(noise_data)
 
-        print("Segmented spearman.")
-        for i in range(0, len(borders)):
-            """store = []
-            for it, k in reversed(list(enumerate(uniform_k2))):
-                if k < borders[i]:
-                    if prt_time:
-                        to_append = np.median(densities[:, it, :], axis=2)
-                    else:
-                        to_append = den5sities[:, it]
-
-                    store.append(to_append)
-                    uniform_k2.pop(it)
-            store = np.array(store)"""
-            #if np.size(store) > 1:
-            if (i != 0 and i != len(borders) - 1) or (i == 0 and mink != 0) or (i == len(borders) - 1 and maxk != 1):
-                #store = np.median(store, axis=0)
-                old_verbose = verbose
-                verbose = False
-                s_energy, s_data, s_q = pendulum_train_gen(data_size=args.data_size, noise=args.noise, traj_samples=1,
-                    mink=(0 if i == 0 else borders[i - 1]), maxk=borders[i], uniform=True, img_size=data_args['img_size'],
-                    diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
-                exact_k2, exact_data, exact_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-                    noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
-                    diff_time=data_args['diff_time'], gaps=data_args['gaps'],
-                    crop=data_args['crop'],crop_c = data_args['crop_c'],
-                    t_window=data_args['t_window'],t_range=data_args['t_range'],
-                    mink=(0 if i==0 else borders[i - 1]), maxk=borders[i])
-                verbose = old_verbose
-                s_data = torch.FloatTensor(s_data)
-                exact_data = torch.FloatTensor(exact_data)
-                if torch.cuda.is_available():
-                    s_data = s_data.cuda()
-                    exact_data = exact_data.cuda()
-
-                for j in range(0, len(b)):
-                    b[j].eval()
-                    out = b[j](s_data[:, 0, :, :, :])
-                    same_out = b[j](exact_data[:, 0, :, :, :])
-                    out = out.cpu().detach().numpy()
-                    same_out = same_out.cpu().detach().numpy()
-                    spearman[j][i] = stats.spearmanr(out.ravel(), s_energy[:, :, 0].ravel()).correlation
-                    same_spearman[j][i] = stats.spearmanr(same_out.ravel(), exact_k2[:, :, 0].ravel()).correlation
-
-                    combined[j][i] = 1.0 / (np.quantile(out, 0.75) - np.quantile(out, 0.25))
-                    same_combined[j][i] = 1.0 / (np.quantile(same_out, 0.75) - np.quantile(same_out, 0.25))
-                    if i == 0:
-                        combined[j][i] = combined[j][i] * mink
-                        same_combined[j][i] = same_combined[j][i] * mink
-                    elif i == len(borders) - 1:
-                        combined[j][i] = combined[j][i] * (1 - maxk)
-                        same_combined[j][i] = same_combined[j][i] * (1 - maxk)
-                    elif i % 2 == 1:
-                        combined[j][i] = combined[j][i] * btwn_width
-                        same_combined[j][i] = same_combined[j][i] * btwn_width
-                    elif i % 2 == 0:
-                        combined[j][i] = combined[j][i] * gap_width
-                        same_combined[j][i] = same_combined[j][i] * gap_width
-            #combined.append(list(store))
-
-        print("density")
-        for i in range(0, len(b)):
-            file_name = load_files[i][:-4]
-            file_name = file_name[file_name.rfind('/') + 1:]
-            i_combined = combined[i].round(decimals=3).tolist
-            i_spearman = spearman[i].round(decimals=3).tolist
-            i_raw = 
-
-
-        print("Density differences.")
-        for i in range(0, len(b)):
-            print(load_files[i])
-            if verbose:
-                print("density")
-                print(combined[i].round(decimals=3))
-                print("spearman")
-                print(spearman[i].round(decimals=3))
-
-            with open(load_files[i][:-4] + "_dens", 'wb') as fp:
-                pickle.dump(combined[i].tolist, fp)
-            with open(load_files[i][:-4] + "_spearman", 'wb') as fp:
-                pickle.dump(spearman[i].tolist, fp)
-
-        for i in range(0, len(b)):
-            print(load_files[i])
-            if verbose:
-                print("same_density")
-                print(same_combined[i].round(decimals=3))
-                print("same_spearman")
-                print(same_spearman[i].round(decimals=3))
-
-            with open(load_files[i][:-4] + "_dens2", 'wb') as fp:
-                pickle.dump(same_combined[i].tolist, fp)
-            with open(load_files[i][:-4] + "_spearman2", 'wb') as fp:
-                pickle.dump(same_spearman[i].tolist, fp)
-
+        segment_analysis(borders, noise_data, noise_k2)
 
 def main(args):
     global verbose
@@ -1229,7 +1111,7 @@ def main(args):
     args.t_window[1] = float(args.t_window[1])
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-    
+
     args.path_dir = '../output/pendulum/' + args.path_dir
 
     set_deterministic(42)
@@ -1239,6 +1121,8 @@ def main(args):
         testing_loop(args)
     elif args.mode == 'plotting':
         plotting_loop(args)
+    elif args.mode == 'analysis':
+        analysis_loop(args)
     elif args.mode == 'supervised':
         supervised_loop(args)
     else:
@@ -1254,7 +1138,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--mode', default='training', type=str,
-                        choices=['plotting', 'training', 'testing', 'supervised'])
+                        choices=['plotting', 'training', 'testing', 'analysis', 'supervised'])
     parser.add_argument('--method', default='infonce', type=str,
                         choices=['infonce', 'simsiam'])
     parser.add_argument('--gpu', default=4, type=int)
