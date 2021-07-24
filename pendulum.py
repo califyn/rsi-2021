@@ -134,7 +134,7 @@ def info_nce(z1, z2, temperature=0.1, distance="cosine"):
     return loss
 
 def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
-        shuffle=True, check_energy=False, k2=None, image=True,
+        shuffle=True, check_energy=False, k2=None, image=True, both_noise=True,
         blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False,
         gaps=[-1,-1], crop=1.0, crop_c=[-1,-1], t_window=[-1,-1], t_range=-1, mink=0, maxk=1):
     """
@@ -284,7 +284,7 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
 
-        if noise > 0 or False:
+        if noise > 0 and both_noise:
             translation_noise = rng.uniform(0, 1, size=(2, data_size, traj_samples))
             translation_noise = np.minimum(np.ones(translation_noise.shape),
                                     np.floor(np.abs(translation_noise) / (1 - 2 * noise))) * translation_noise / np.abs(translation_noise)
@@ -314,15 +314,16 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
             pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
         pxls = pxls[:, :, 1:img_size + 1, 1:img_size + 1, :]
 
-        #pxls = pxls + noise / 4 * rng.standard_normal(size=pxls.shape)
-        #tint_noise = rng.uniform(- noise / 8, noise / 8, size=(data_size, traj_samples, 1, 1, 3))
-        #pxls = pxls + tint_noise
-        #pxls = np.minimum(np.ones(pxls.shape), np.maximum(np.zeros(pxls.shape), pxls))
+        if both_noise:
+            pxls = pxls + noise / 4 * rng.standard_normal(size=pxls.shape)
+            tint_noise = rng.uniform(- noise / 8, noise / 8, size=(data_size, traj_samples, 1, 1, 3))
+            pxls = pxls + tint_noise
+            pxls = np.minimum(np.ones(pxls.shape), np.maximum(np.zeros(pxls.shape), pxls))
 
         if verbose:
             print("[Dataset] Images computed")
 
-        """pxls = pxls * 255
+        pxls = pxls * 255
         pxls = pxls.astype(np.uint8)
         #bigpxls = bigpxls * 255
         #bigpxls = bigpxls.astype(np.uint8)
