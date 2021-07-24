@@ -936,7 +936,7 @@ def analysis_loop(args, encoder=None):
 
     prt_image = data_args['crop'] != 1.0
     prt_time = data_args['t_window'] != [-1, -1] or data_args['t_range'] != -1
-    prt_energy = data_args['gaps'] != [-1, -1] or data_args['mink'] != 0 or data_args['maxk'] != 0
+    prt_energy = data_args['gaps'] != [-1, -1] or data_args['mink'] != 0 or data_args['maxk'] != 1
 
     def slim(arr):
         shape = list(arr.shape)
@@ -944,19 +944,19 @@ def analysis_loop(args, encoder=None):
         shape.pop(1)
         return np.reshape(arr, tuple(shape))
 
-    def segment_analysis(borders, data, k2, print=True):
+    def segment_analysis(borders, data, k2, print_results=True):
         k2 = k2.ravel()
         idx = np.searchsorted(borders, k2).ravel()
 
-        density = np.zeros((len(b), borders))
-        spearman = np.zeros((len(b), borders))
+        density = np.zeros((len(b), len(borders)))
+        spearman = np.zeros((len(b), len(borders)))
         full_sm = np.zeros((len(b)))
 
         data = torch.FloatTensor(data)
         if torch.cuda.is_available():
             data = data.cuda()
 
-        lens = [borders[0]] + (borders[1:] - borders[0:]).tolist
+        lens = [borders[0]] + list(np.array(borders[1:]) - np.array(borders[:-1]))
         lens = np.array(lens)
 
         for i in range(0, len(b)):
@@ -966,31 +966,37 @@ def analysis_loop(args, encoder=None):
             full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
 
             for j in range(0, len(borders)):
+                if (j == 0 and borders[0] == 0) or (j == len(borders) - 1 and borders[-1] == 1):
+                    continue
                 seg_out = out[idx == j]
                 seg_k2 = k2[idx == j]
 
                 spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
                 density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
 
-        if print:
+        if print_results:
             file_names = []
             for i in range(0, len(b)):
                 file_name = load_files[i][:-4]
                 file_name = file_name[file_name.rfind('/') + 1:]
                 file_names.append(file_name)
 
+            density = density.round(decimals=3)
+            full_sm = full_sm.round(decimals=3)
+            spearman = spearman.round(decimals=3)
+
             print("density")
             for i in range(0, len(b)):
-                print(file_names[i] + " " + str(density[i].tolist))
+                print(file_names[i] + " " + np.array2string(density[i]))
             print("")
             print("spearman")
             for i in range(0, len(b)):
-                print(file_names[i] + " " + str(full_sm[i])+ " " + str(spearman[i].tolist))
+                print(file_names[i] + " " + str(full_sm[i])+ " " + np.array2string(spearman[i]))
+            print("")
             return
         else:
             return full_sm, density, spearman
 
-    print("same")
     same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
         noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
         diff_time=data_args['diff_time'], gaps=data_args['gaps'],
@@ -998,7 +1004,7 @@ def analysis_loop(args, encoder=None):
         t_window=data_args['t_window'],t_range=data_args['t_range'],
         mink=data_args['mink'], maxk=data_args['maxk'])
 
-    same_k2 = slim(same_k2)
+    same_k2 = slim(same_k2[:,:,0])
     same_data = slim(same_data)
 
     num_gaps = data_args['gaps'][0]
@@ -1023,6 +1029,7 @@ def analysis_loop(args, encoder=None):
     borders.append(borders[-1] + btwn_width)
     borders.append(data_args['maxk'])
 
+    print("same")
     segment_analysis(borders, same_data, same_k2)
 
     if prt_image:
@@ -1053,7 +1060,7 @@ def analysis_loop(args, encoder=None):
             t_window=[-1,-1],t_range=-1,
             mink=data_args['mink'], maxk=data_args['maxk'])
 
-        all_k2 = slim(all_k2)
+        all_k2 = slim(all_k2[:,:,0])
         all_data = slim(all_data)
 
         segment_analysis(borders, all_data, all_k2)
@@ -1067,10 +1074,10 @@ def analysis_loop(args, encoder=None):
             t_window=data_args['t_window'],t_range=data_args['t_range'],
             mink=data_args['mink'], maxk=data_args['maxk'])
 
-        all_k2 = slim(all_k2)
+        all_k2 = slim(all_k2[:,:,0])
         all_data = slim(all_data)
 
-        new_borders = [1/7, 2/7, 3/7, 4/7, 5/7, 6/7, 1]
+        new_borders = np.array([0, 1/7, 2/7, 3/7, 4/7, 5/7, 6/7, 1])
         new_borders = new_borders * (data_args['maxk'] - data_args['mink']) + data_args['mink']
 
         segment_analysis(new_borders, all_data, all_k2)
@@ -1084,7 +1091,7 @@ def analysis_loop(args, encoder=None):
             t_window=data_args['t_window'],t_range=data_args['t_range'],
             mink=data_args['mink'], maxk=data_args['maxk'])
 
-        noise_k2 = slim(noise_k2)
+        noise_k2 = slim(noise_k2[:,:,0])
         noise_data = slim(noise_data)
 
         segment_analysis(borders, noise_data, noise_k2)
