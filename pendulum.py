@@ -858,7 +858,7 @@ def testing_loop(args, encoder=None):
         #mink=args.mink, maxk=args.max)
     test_k2, test_data, test_q = pendulum_train_gen(data_size=args.data_size,
         traj_samples=args.traj_len,
-        noise=args.noise, gaps=args.gaps, uniform=True, img_size=data_args['img_size'],
+        nnoise=args.nnoise, gnoise=args.gnoise, gaps=args.gaps, uniform=True, img_size=data_args['img_size'],
         diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
 
     if verbose:
