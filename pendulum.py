@@ -8,6 +8,7 @@ import random
 from PIL import Image
 import pickle
 import json
+from copy import deepcopy
 
 # sci suite
 import statistics
@@ -134,8 +135,8 @@ def info_nce(z1, z2, temperature=0.1, distance="cosine"):
     loss = torch.nn.functional.cross_entropy(logits, labels)
     return loss
 
-def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
-        shuffle=True, check_energy=False, k2=None, image=True, both_noise=True,
+def pendulum_train_gen(data_size, traj_samples=10, gnoise=0., nnoise=0., uniform=False,
+        shuffle=True, check_energy=False, k2=None, image=True,
         blur=False, img_size=32, diff_time=0.5, bob_size=1, continuous=False,
         gaps=[-1,-1], crop=1.0, crop_c=[-1,-1], t_window=[-1,-1], t_range=-1, mink=0, maxk=1):
     """
@@ -215,7 +216,7 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
                 else:
                     k2 = k2 * np.ones((data_size, 1, 1))
         else:
-            if k2 != None:
+            if k2 == None:
                 if not uniform:
                     k2 = rng.uniform(0, 1 - gaps[1], size=(data_size, 1, 1))
                     prefix = np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * ((1 - gaps[1]) / (gaps[0] + 1) + gaps[1] / gaps[0])
@@ -223,7 +224,7 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
                     k2 = prefix + frac
                     k2 = k2 * (maxk - mink) + mink
                 else:
-                    k2 = np.linspace(0, 1 - gaps[1], num=data_size)
+                    k2 = np.linspace(0, 1 - gaps[1], num=data_size, endpoint=False)
                     k2 = np.reshape(k2, (data_size, 1, 1))
                     prefix = np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * ((1 - gaps[1]) / (gaps[0] + 1) + gaps[1] / gaps[0])
                     frac = k2 - np.floor(k2 / (1 - gaps[1]) * (gaps[0] + 1)) * (1 - gaps[1]) / (gaps[0] + 1)
@@ -242,8 +243,8 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
             for x in q:
                 rng.shuffle(x, axis=0) # TODO: check if the shapes work out
 
-        if noise > 0:
-            q += noise * rng.standard_normal(size=q.shape)
+        if nnoise > 0:
+            q += nnoise * rng.standard_normal(size=q.shape)
 
         # Image generation begins here
         if crop != 1.0:
@@ -285,10 +286,10 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
         c = np.expand_dims(c[:, :, 0, :, :, :], 2)
         idx_final = np.concatenate((idx, pos, c), axis=2)
 
-        if noise > 0 and both_noise:
+        if gnoise > 0:
             translation_noise = rng.uniform(0, 1, size=(2, data_size, traj_samples))
             translation_noise = np.minimum(np.ones(translation_noise.shape),
-                                    np.floor(np.abs(translation_noise) / (1 - 2 * noise))) * translation_noise / np.abs(translation_noise)
+                                    np.floor(np.abs(translation_noise) / (1 - 2 * gnoise))) * translation_noise / np.abs(translation_noise)
             translation_noise = np.concatenate((np.zeros(translation_noise.shape), translation_noise, np.zeros(translation_noise.shape)), axis=0)
             translation_noise = translation_noise[:5]
             translation_noise = np.expand_dims(translation_noise, [0, 1, 5])
@@ -315,16 +316,16 @@ def pendulum_train_gen(data_size, traj_samples=10, noise=0., uniform=False,
             pxls[idx_final[0], idx_final[1], idx_final[2], idx_final[3], idx_final[4]] = 0
         pxls = pxls[:, :, 1:img_size + 1, 1:img_size + 1, :]
 
-        if both_noise:
-            pxls = pxls + noise / 4 * rng.standard_normal(size=pxls.shape)
-            tint_noise = rng.uniform(- noise / 8, noise / 8, size=(data_size, traj_samples, 1, 1, 3))
+        if gnoise > 0:
+            pxls = pxls + gnoise / 4 * rng.standard_normal(size=pxls.shape)
+            tint_noise = rng.uniform(- gnoise / 8, gnoise / 8, size=(data_size, traj_samples, 1, 1, 3))
             pxls = pxls + tint_noise
             pxls = np.minimum(np.ones(pxls.shape), np.maximum(np.zeros(pxls.shape), pxls))
 
         if verbose:
             print("[Dataset] Images computed")
 
-        pxls = pxls * 255
+        """pxls = pxls * 255
         pxls = pxls.astype(np.uint8)
         #bigpxls = bigpxls * 255
         #bigpxls = bigpxls.astype(np.uint8)
@@ -369,10 +370,10 @@ class PendulumNumericalDataset(torch.utils.data.Dataset):
         return self.size
 
 class PendulumImageDataset(torch.utils.data.Dataset):
-    def __init__(self, size=5120, trajectory_length=20, noise=0.00, both_noise=False,
+    def __init__(self, size=5120, trajectory_length=20, nnoise=0.00, gnoise=0.00,
                     img_size=32, diff_time=0.5, gaps=-1, crop=1.0, crop_c=[.75,.5],
                     t_window=[-1,-1], t_range=-1, mink=0, maxk=1, full_out=False):
-        self.k2, self.data, self.q = pendulum_train_gen(size, noise=noise, traj_samples=trajectory_length, both_noise=both_noise,
+        self.k2, self.data, self.q = pendulum_train_gen(size, nnoise=nnoise, gnoise=gnoise, traj_samples=trajectory_length,
                                                 img_size=img_size, diff_time=diff_time, gaps=gaps, crop=crop, crop_c=crop_c,
                                                 t_window=t_window, t_range=t_range, mink=mink, maxk=maxk)
         self.trajectory_length = trajectory_length
@@ -387,7 +388,7 @@ class PendulumImageDataset(torch.utils.data.Dataset):
                 return [
                     torch.cuda.FloatTensor(self.data[idx][i]),
                     torch.cuda.FloatTensor(self.data[idx][j]),
-                    self.k2[idx],
+                    self.k2[idx][:2],
                     self.q[idx][i],
                     self.q[idx][j]
                 ]  # [first_view, second_view, energy]
@@ -395,7 +396,7 @@ class PendulumImageDataset(torch.utils.data.Dataset):
                 return [
                     torch.FloatTensor(self.data[idx][i]),
                     torch.FloatTensor(self.data[idx][j]),
-                    self.k2[idx],
+                    self.k2[idx][:2],
                     self.q[idx][i],
                     self.q[idx][j]
                 ]
@@ -532,9 +533,11 @@ def plotting_loop(args):
     plt.savefig(os.path.join(args.path_dir, 'dataset.png'), dpi=300)
 
 def supervised_loop(args, encoder=None):
-    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=4)
+    dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=args.data_size, gaps=args.gaps),
+        dataset=PendulumImageDataset(size=args.data_size, trajectory_length=args.traj_len, nnoise=args.nnoise, gnoise=args.gnoise,
+                                        img_size=args.img_size, diff_time=args.diff_time, gaps=args.gaps, crop=args.crop, crop_c = args.crop_c,
+                                        t_window=args.t_window, t_range=args.t_range, mink=args.mink, maxk=args.maxk),
         shuffle=True,
         batch_size=args.bsz,
         **dataloader_kwargs
@@ -585,6 +588,11 @@ def supervised_loop(args, encoder=None):
 
     loss = torch.nn.MSELoss()
 
+    data_args = vars(args)
+
+    with open(os.path.join(args.path_dir, '0.args'), 'w') as fp:
+        json.dump(data_args, fp, indent=4)
+
     for e in range(1, args.epochs + 1):
         b.train()
 
@@ -595,7 +603,7 @@ def supervised_loop(args, encoder=None):
 
             # forward pass
             out = b(x1)
-            out_loss = loss(out, energy.float())
+            out_loss = loss(out, energy.float().cuda()[:, :1, 0])
 
             # optimization step
             out_loss.backward()
@@ -603,8 +611,6 @@ def supervised_loop(args, encoder=None):
             optimizer.step()
 
             lr_scheduler.step()
-            if args.dim_pred:
-                pred_optimizer.step()
 
         if e % args.progress_every == 0 or e % args.save_every == 0:
             if args.validation:
@@ -624,6 +630,11 @@ def supervised_loop(args, encoder=None):
                 file_to_update.write(line_to_print + '\n')
                 file_to_update.flush()
 
+                with open(os.path.join(args.path_dir, f'{e}.args'), 'w') as fp:
+                    json.dump(data_args, fp, indent=4)
+
+                print("[saved]")
+
     file_to_update.close()
     if verbose:
         print("[Supervised] Training complete")
@@ -635,7 +646,7 @@ def training_loop(args, encoder=None):
     # dataset
     dataloader_kwargs = dict(drop_last=True, pin_memory=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(
-        dataset=PendulumImageDataset(size=args.data_size, trajectory_length=args.traj_len, noise=args.noise, both_noise=args.both_noise,
+        dataset=PendulumImageDataset(size=args.data_size, trajectory_length=args.traj_len, nnoise=args.nnoise, gnoise=args.gnoise,
                                         img_size=args.img_size, diff_time=args.diff_time, gaps=args.gaps, crop=args.crop, crop_c = args.crop_c,
                                         t_window=args.t_window, t_range=args.t_range, mink=args.mink, maxk=args.maxk),
         shuffle=True,
@@ -717,7 +728,7 @@ def training_loop(args, encoder=None):
 
     data_args = vars(args)
 
-    with open(os.path.join(args.path_dir, '0.args'), 'wb') as fp:
+    with open(os.path.join(args.path_dir, '0.args'), 'w') as fp:
         json.dump(data_args, fp, indent=4)
 
     # training
@@ -783,7 +794,7 @@ def training_loop(args, encoder=None):
                 file_to_update.write(line_to_print + '\n')
                 file_to_update.flush()
 
-                with open(os.path.join(args.path_dir, f'{e}.args'), 'wb') as fp:
+                with open(os.path.join(args.path_dir, f'{e}.args'), 'w') as fp:
                     json.dump(data_args, fp, indent=4)
                 print("[saved]")
 
@@ -820,7 +831,7 @@ def testing_loop(args, encoder=None):
 
     for load_file in load_files:
         with open(load_file[:-4] + ".args", 'rb') as fp:
-            new_data_args = pickle.load(fp)
+            new_data_args = json.load(fp)
             if data_args == {}:
                 data_args = new_data_args
             else:
@@ -928,6 +939,10 @@ def analysis_loop(args, encoder=None):
     prt_time = data_args['t_window'] != [-1, -1] or data_args['t_range'] != -1
     prt_energy = data_args['gaps'] != [-1, -1] or data_args['mink'] != 0 or data_args['maxk'] != 1
 
+    if "both_noise" in data_args.keys():
+        data_args["nnoise"] = data_args["noise"]
+        data_args["gnoise"] = data_args["noise"]
+
     def slim(arr):
         shape = list(arr.shape)
         shape[0] = shape[0] * shape[1]
@@ -961,8 +976,13 @@ def analysis_loop(args, encoder=None):
                 seg_out = out[idx == j]
                 seg_k2 = k2[idx == j]
 
-                spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
-                density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+                if seg_out.size > 0:
+                    spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                    density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+                else:
+                    print(borders)
+                    spearman[i, j] = 0
+                    density[i, j] = 0
 
         if print_results:
             file_names = []
@@ -988,7 +1008,7 @@ def analysis_loop(args, encoder=None):
             return full_sm.tolist(), density.tolist(), spearman.tolist()
 
     same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-        noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],both_noise=data_args['both_noise'],
+        nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],gnoise=data_args['gnoise'],
         diff_time=data_args['diff_time'], gaps=data_args['gaps'],
         crop=data_args['crop'],crop_c = data_args['crop_c'],
         t_window=data_args['t_window'],t_range=data_args['t_range'],
@@ -1000,16 +1020,19 @@ def analysis_loop(args, encoder=None):
     num_gaps = data_args['gaps'][0]
     if num_gaps == -1:
         num_gaps = 0
+    
+    num_gaps = int(num_gaps)
 
     if num_gaps > 0:
         gap_width = data_args['gaps'][1] / num_gaps
-        gap_width = gap_width * (data_args['maxk'] - data_args['mink'])
+        print(gap_width)
         btwn_width = (1 - data_args['gaps'][1]) / (num_gaps + 1)
     else:
         btwn_width = 1/7
         gap_width = 1/7
         num_gaps = 3
     btwn_width = btwn_width * (data_args['maxk'] - data_args['mink'])
+    gap_width = gap_width * (data_args['maxk'] - data_args['mink'])
 
     borders = [data_args['mink']]
 
@@ -1020,22 +1043,23 @@ def analysis_loop(args, encoder=None):
     borders.append(data_args['maxk'])
 
     print("same")
-    same_args = data_args
+    same_args = deepcopy(data_args)
     same_args["visible_only"] = False
     same_fl, same_dn, same_sp = segment_analysis(borders, same_data, same_k2)
 
     to_save = [[same_args, same_fl, same_dn, same_sp]]
 
     if prt_image:
-        print("visible only")
-        red_visible = same_data[:, :, :, 0]
+        red_visible = same_data[:, 2, :, :]
         red_visible = np.reshape(red_visible, (np.size(red_visible, axis=0), -1))
-        red_visible = np.sum(1 - np.floor(red_visible * 2), axis=2)
+        red_visible = np.where(red_visible == 0, red_visible + 0.0001, red_visible)
+        red_visible = np.sum(2 - np.ceil(red_visible * 2), axis=1)
         red_visible = np.where(red_visible < 9, 0, 1)
 
-        blue_visible = same_data[:, :, :, 2]
+        blue_visible = same_data[:, 0, :, :]
         blue_visible = np.reshape(blue_visible, (np.size(blue_visible, axis=0), -1))
-        blue_visible = np.sum(1 - np.floor(blue_visible * 2), axis=2)
+        blue_visible = np.where(blue_visible == 0, blue_visible + 0.0001, blue_visible)
+        blue_visible = np.sum(2 - np.ceil(blue_visible * 2), axis=1)
         blue_visible = np.where(blue_visible < 9, 0, 1)
 
         visible = red_visible * blue_visible
@@ -1043,7 +1067,7 @@ def analysis_loop(args, encoder=None):
         vis_data = same_data[visible == 1, ...]
         vis_k2 = same_k2[visible == 1, ...]
 
-        vis_args = data_args
+        vis_args = deepcopy(data_args)
         vis_args["visible_only"] = True
         vis_fl, vis_dn, vis_sp = segment_analysis(borders, vis_data, vis_k2)
         to_save.append([vis_args, vis_fl, vis_dn, vis_sp])
@@ -1051,16 +1075,16 @@ def analysis_loop(args, encoder=None):
     if prt_time:
         print("all times")
         all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-            noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
+            nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],
             diff_time=data_args['diff_time'], gaps=data_args['gaps'],
             crop=data_args['crop'],crop_c = data_args['crop_c'],
-            t_window=[-1,-1],t_range=-1,both_noise=data_args['both_noise'],
+            t_window=[-1,-1],t_range=-1,gnoise=data_args['gnoise'],
             mink=data_args['mink'], maxk=data_args['maxk'])
 
         all_k2 = slim(all_k2[:,:,0])
         all_data = slim(all_data)
 
-        time_args = data_args
+        time_args = deepcopy(data_args)
         time_args["t_window"] = [-1,-1]
         time_args["t_range"] = -1
         time_args["visible_only"] = False
@@ -1070,8 +1094,8 @@ def analysis_loop(args, encoder=None):
     if prt_energy:
         print("all energies")
         all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-            noise=data_args['noise'],uniform=True,img_size=data_args['img_size'],
-            diff_time=data_args['diff_time'], gaps=[-1,-1],both_noise=data_args['both_noise'],
+            nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],
+            diff_time=data_args['diff_time'], gaps=[-1,-1],gnoise=data_args['gnoise'],
             crop=data_args['crop'],crop_c = data_args['crop_c'],
             t_window=data_args['t_window'],t_range=data_args['t_range'],
             mink=0, maxk=1)
@@ -1082,7 +1106,7 @@ def analysis_loop(args, encoder=None):
         new_borders = np.array([0, 1/7, 2/7, 3/7, 4/7, 5/7, 6/7, 1])
         new_borders = new_borders * (data_args['maxk'] - data_args['mink']) + data_args['mink']
 
-        energy_args = data_args
+        energy_args = deepcopy(data_args)
         energy_args["gaps"] = [-1,-1]
         energy_args["mink"] = 0
         energy_args["maxk"] = 1
@@ -1090,26 +1114,32 @@ def analysis_loop(args, encoder=None):
         energy_fl, energy_dn, energy_sp = segment_analysis(new_borders, all_data, all_k2)
         to_save.append([energy_args, energy_fl, energy_dn, energy_sp])
 
-    if args.noise != data_args['noise']:
+    if args.nnoise != data_args["nnoise"] or args.gnoise != data_args["gnoise"]:
         print("args-specified noise")
         noise_k2, noise_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-            noise=args.noise,uniform=True,img_size=data_args['img_size'],
+            nnoise=args.nnoise,uniform=True,img_size=data_args['img_size'],
             diff_time=data_args['diff_time'], gaps=data_args['gaps'],
-            crop=data_args['crop'],crop_c = data_args['crop_c'],both_noise=data_args['both_noise'],
+            crop=data_args['crop'],crop_c = data_args['crop_c'],gnoise=args.gnoise,
             t_window=data_args['t_window'],t_range=data_args['t_range'],
             mink=data_args['mink'], maxk=data_args['maxk'])
 
         noise_k2 = slim(noise_k2[:,:,0])
         noise_data = slim(noise_data)
 
-        noise_args = data_args
-        noise_args["noise"] = args.noise
+        noise_args = deepcopy(data_args)
+        noise_args["nnoise"] = args.nnoise
         noise_args["visible_only"] = False
         noise_fl, noise_dn, noise_sp = segment_analysis(borders, noise_data, noise_k2)
         to_save.append([noise_args, noise_fl, noise_dn, noise_sp])
 
-    with open("data/master_experiments.json", "a+") as fp:
-        all_experiments = json.load(fp)
+    if not os.path.isfile("data/master_experiments.json"):
+        open("data/master_experiments.json", "w")
+
+    with open("data/master_experiments.json", "r+") as fp:
+        if os.stat("data/master_experiments.json").st_size == 0:
+            all_experiments = {}
+        else:
+            all_experiments = json.load(fp)
 
         for i in range(0, len(b)):
             file_name = load_files[i][:-4]
@@ -1129,9 +1159,20 @@ def analysis_loop(args, encoder=None):
                 dict["density"] = instance[2][i]
                 dict["spearman"] = instance[3][i]
 
-                all_experiments[str(datetime.datetime.now())] = dict
+                is_duplicate = False
+                for key, value in all_experiments.items():
+                    this_duplicate = True
+                    for kk in ["experiment_name", "old_params", "new_params", "epoch"]:
+                        if dict[kk] != value[kk]:
+                            this_duplicate = False
+
+                    if this_duplicate:
+                        is_duplicate = True
+
+                if not is_duplicate:
+                    all_experiments[str(datetime.datetime.now())] = dict
         fp.seek(0)
-        json.dump(all_experiments, fp)
+        json.dump(all_experiments, fp, indent=4)
         fp.truncate()
 
 def main(args):
@@ -1157,6 +1198,8 @@ def main(args):
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
+    if args.path_dir == "":
+        raise UserWarning("please do not pass empty experiment names")
     args.path_dir = '../output/pendulum/' + args.path_dir
 
     set_deterministic(42)
@@ -1203,8 +1246,8 @@ if __name__ == '__main__':
     parser.add_argument('--mink', default=0.0, type=float)
     parser.add_argument('--maxk', default=1.0, type=float)
 
-    parser.add_argument('--noise', default=0., type=float)
-    parser.add_argument('--both_noise', default=False, action='store_true')
+    parser.add_argument('--gnoise', default=0., type=float)
+    parser.add_argument('--nnoise', default=0., type=float)
 
     # File I/O
     parser.add_argument('--path_dir', default='', type=str)
@@ -1235,7 +1278,7 @@ if __name__ == '__main__':
 
     # NN size options
     parser.add_argument('--dim_pred', default=1, type=int)
-    parser.add_argument('--repr_dim', default=2, type=int)
+    parser.add_argument('--repr_dim', default=1, type=int)
     parser.add_argument('--affine', action='store_false')
     parser.add_argument('--deeper', action='store_false')
 
