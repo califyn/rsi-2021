@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import ellipj
 from scipy import stats
+from sklearn.manifold import SpectralEmbedding
 
 # torch
 import torch
@@ -877,7 +878,7 @@ def testing_loop(args, encoder=None):
             for j in range(0, args.data_size):
                 coded[i, j, :, :] = b[i](torch.FloatTensor(test_data[j, :, :, :, :])).detach().numpy()
     energies = test_k2[:, 0]
-    qs = test_q[:, 0]
+    qs = test_q
 
     os.makedirs(os.path.join(args.path_dir, "testing"), exist_ok=True)
     for idx, load_file in enumerate(load_files):
@@ -967,6 +968,11 @@ def analysis_loop(args, encoder=None):
         for i in range(0, len(b)):
             out = b[i](data)
             out = out.cpu().detach().numpy()
+
+            print(out.shape)
+            if np.size(out, axis=1) > 1:
+                spectral = SpectralEmbedding(n_components=1)
+                out = spectral.fit_transform(out)
 
             full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
 

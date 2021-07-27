@@ -14,7 +14,7 @@ def run_cmd(cmds, gpu):
         #        f.buffer.write(c)
 
 if __name__ == "__main__":
-    dims = [1, 2, 3]
+    dims = [2, 3]
     #test_noises = [0,0.01,0.125,0.25]
     trials = [0, 1, 2, 3, 4]
     #noises=[0,0.05]
@@ -25,8 +25,8 @@ if __name__ == "__main__":
 
     for k in trials:
         for dim in dims:
-            long_cmd.append("cd ..; python pendulum.py --verbose --repr_dim=" + str(dim) + " --path_dir=" + str(k) + "vnladim_" + str(dim) + "_sup --mode=supervised");
-            long_cmd.append("cd ..; python pendulum.py --verbose --repr_dim=" + str(dim) + " --path_dir=" + str(k) + "vnladim_" + str(dim));
+            #long_cmd.append("cd ..; python pendulum.py --verbose --repr_dim=" + str(dim) + " --path_dir=" + str(k) + "vnladim_" + str(dim) + "_sup --mode=supervised");
+            #long_cmd.append("cd ..; python pendulum.py --verbose --repr_dim=" + str(dim) + " --path_dir=" + str(k) + "vnladim_" + str(dim));
             short_cmd.append("cd ..; python pendulum.py --verbose --mode=analysis --path_dir=" + str(k) + "vnladim_" + str(dim) + "_sup");
             short_cmd.append("cd ..; python pendulum.py --verbose --mode=analysis --path_dir=" + str(k) + "vnladim_" + str(dim));
 
