@@ -14,11 +14,11 @@ def run_cmd(cmds, gpu):
         #        f.buffer.write(c)
 
 if __name__ == "__main__":
-    noises = [0,0.001,0.0025,0.005,0.01,0.025,0.05,0.1,0.125,0.2,0.25]
-    names = ["inf", "1000", "400", "200", "100", "40", "20", "10","8","5","4"]
+    noises = [0]#,0.001,0.0025,0.005,0.01,0.025,0.05,0.1,0.125,0.2,0.25]
+    names = ["inf"]#, "1000", "400", "200", "100", "40", "20", "10","8","5","4"]
     #test_noises = [0,0.01,0.125,0.25]
     test_noises = [0]
-    trials = [0, 1, 2, 3, 4]
+    trials = [5,6,7,8,9]
     #noises=[0,0.05]
     #names=["inf","20"]
     #test_noises=[0]
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     print(len(long_cmd))
     print(len(short_cmd))
 
-    """for cmds in [long_cmd]:
+    for cmds in [long_cmd]:
         jobs = []
         for i in range(3, 8):
             print(str(i))
@@ -58,7 +58,7 @@ if __name__ == "__main__":
             print("starting " + str(i))
             p.start()
         for job in jobs:
-            job.join()"""
+            job.join()
 
     for cmds in [short_cmd]:
         run_cmd(cmds, 3)

@@ -10,14 +10,14 @@ except Exception:
     pass
 import matplotlib.pyplot as plt
 
-expname = "inoise"
+expname = "nnoise"
 
 with open("../data/master_experiments.json", "r") as f:
     data = json.load(f)
 
 keys = list(data.keys())
 for key in keys:
-    if expname not in data[key]["experiment_name"]:
+    if expname not in data[key]["experiment_name"] or int(data[key]["experiment_name"][0]) > 4:
         data.pop(key)
 
 noises = [0,0.001,0.0025,0.005,0.01,0.025,0.05,0.1,0.125,0.2,0.25]
@@ -28,6 +28,7 @@ noises = np.reciprocal(noises).astype("int32").tolist()
 noises[0] = "inf"
 for i in range(0, len(noises)):
     noises[i] = str(noises[i])
+
 res = np.zeros((11,5))
 resp = np.zeros((11,5,7))
 sres= np.zeros((11,5))
@@ -75,7 +76,7 @@ def OneMinusLogInv(arr):
     return 1 - np.exp(-1 * arr)
 
 
-"""fig, ax1 = plt.subplots()
+fig, ax1 = plt.subplots()
 
 ax1.set_xscale('log')
 ax1.set_yscale('function', functions=(OneMinusLog, OneMinusLogInv))
@@ -86,10 +87,9 @@ ax1.tick_params(axis='y', labelcolor=[1,0,0])
 ax1.plot(orig_noises[1:], res[1:], lw=0.75, color=[1,0,0])
 ax1.plot(orig_noises[1:], sres[1:], lw=0.75, color=[1,0,0], linestyle="--")
 
-print(res[0])
-ax1.axhline(y=res[0], lw=0.75, linestyle="-", c=[1,0.5,0.5])
-ax1.axhline(y=sres[0], lw=0.75, linestyle="--", c=[1,0.5,0.5])
-
+ax1.scatter(0.1,0.99383, color="white")
+ax1.axhline(y=0.9938278137526757, lw=0.75, linestyle="-", c=[1,0.5,0.5])
+ax1.axhline(y=0.993669710607535, lw=0.75, linestyle="--", c=[1,0.5,0.5])
 ax2=ax1.twinx()
 
 ax2.set_yscale('function', functions=(OneMinusLog, OneMinusLogInv))
@@ -99,13 +99,13 @@ ax2.tick_params(axis='y', labelcolor=[0,1,0])
 ax2.plot(orig_noises[1:], np.mean(resp[1:],axis=1), lw=0.75, color=[0,1,0])
 ax2.plot(orig_noises[1:], np.mean(sresp[1:],axis=1), lw=0.75, color=[0,1,0], linestyle="--")
 
-ax2.axhline(y=np.mean(resp[0]), lw=0.75, linestyle="-", c=[0.5,1,0.5])
-ax2.axhline(y=np.mean(sresp[0]), lw=0.75, linestyle="--", c=[0.5,1,0.5])
+ax2.axhline(y=0.8092634019325426, lw=0.75, linestyle="-", c=[0.5,1,0.5])
+ax2.axhline(y=0.8043783294835989, lw=0.75, linestyle="--", c=[0.5,1,0.5])
 
 fig.tight_layout()
 plt.show()
 
-plt.clf()"""
+plt.clf()
 
 """plt.xscale('linear')
 plt.yscale('linear')
@@ -125,7 +125,7 @@ plt.legend()
 plt.xlabel("Segment")
 plt.ylabel("Local Spearman")
 plt.show()"""
-
+"""
 fig, axs=plt.subplots()
 axs.set_visible(False)
 ax1  = fig.add_axes([0.10,0.10,0.70,0.85])
@@ -186,5 +186,5 @@ for key in data.keys():
 norm = matplotlib.colors.Normalize(vmin=0,vmax=1)
 ax2  = fig.add_axes([0.85,0.10,0.05,0.85])
 cb1  = matplotlib.colorbar.ColorbarBase(ax2,cmap=plt.get_cmap("plasma"),norm=norm,orientation='vertical')
-plt.show()
+plt.show()"""
     

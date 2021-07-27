@@ -543,6 +543,10 @@ def supervised_loop(args, encoder=None):
         batch_size=args.bsz,
         **dataloader_kwargs
     )
+    if args.save_training_data:
+        np.save(os.path.join(args.path_dir, "training_data.npy"), train_loader.dataset.data)
+        np.save(os.path.join(args.path_dir, "training_k2.npy"), train_loader.dataset.k2)
+        np.save(os.path.join(args.path_dir, "training_q.npy"), train_loader.dataset.q)
     if args.validation:
         test_loader = torch.utils.data.DataLoader(
             dataset=PendulumImageDataset(size=512, gaps=args.gaps),
@@ -857,10 +861,15 @@ def testing_loop(args, encoder=None):
         #diff_time=args.diff_time, gaps=args.gaps,crop=args.crop,
         #crop_c = args.crop_c, t_window=args.t_window,t_range=args.t_range,
         #mink=args.mink, maxk=args.max)
-    test_k2, test_data, test_q = pendulum_train_gen(data_size=args.data_size,
-        traj_samples=args.traj_len,
-        nnoise=args.nnoise, gnoise=args.gnoise, gaps=args.gaps, uniform=True, img_size=data_args['img_size'],
-        diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
+    if not args.use_training_data:
+        test_k2, test_data, test_q = pendulum_train_gen(data_size=args.data_size,
+            traj_samples=args.traj_len,
+            nnoise=args.nnoise, gnoise=args.gnoise, gaps=args.gaps, uniform=True, img_size=data_args['img_size'],
+            diff_time=data_args['diff_time'], crop=data_args['crop'], crop_c=data_args['crop_c'])
+    else:
+        test_data = np.load(os.path.join(args.path_dir, "training_data.npy"))
+        test_k2 = np.load(os.path.join(args.path_dir, "training_k2.npy"))
+        test_q = np.load(os.path.join(args.path_dir, "training_q.npy"))
 
     if verbose:
         print("[testing] Completed data loading")
@@ -950,7 +959,7 @@ def analysis_loop(args, encoder=None):
         shape.pop(1)
         return np.reshape(arr, tuple(shape))
 
-    def segment_analysis(borders, data, k2, print_results=False):
+    def segment_analysis(borders, data, k2, print_results=args.print_results):
         k2 = k2.ravel()
         idx = np.searchsorted(borders, k2).ravel()
 
@@ -966,29 +975,38 @@ def analysis_loop(args, encoder=None):
         lens = np.array(lens)
 
         for i in range(0, len(b)):
-            out = b[i](data)
-            out = out.cpu().detach().numpy()
-
-            print(out.shape)
-            if np.size(out, axis=1) > 1:
-                spectral = SpectralEmbedding(n_components=1)
-                out = spectral.fit_transform(out)
-
-            full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
-
-            for j in range(0, len(borders)):
-                if (j == 0 and borders[0] == 0) or (j == len(borders) - 1 and borders[-1] == 1):
-                    continue
-                seg_out = out[idx == j]
-                seg_k2 = k2[idx == j]
-
-                if seg_out.size > 0:
-                    spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
-                    density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+            b[i].eval()
+            with torch.no_grad():
+                if args.use_training_data:
+                    out = torch.zeros((data.shape[0], data_args["repr_dim"]))
+                    shp = list(data.shape)
+                    shp.insert(0, shp[0] // 16)
+                    shp[1] = 16
+                    data = torch.reshape(data, shp)
+                    for j in range(shp[0]):
+                        out[16 * j:16 * (j + 1)] = b[i](data[j])
                 else:
-                    print(borders)
-                    spearman[i, j] = 0
-                    density[i, j] = 0
+                    out = b[i](data)
+                out = out.cpu().detach().numpy()
+
+                if np.size(out, axis=1) > 1:
+                    spectral = SpectralEmbedding(n_components=1)
+                    out = spectral.fit_transform(out)
+
+                full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
+
+                for j in range(0, len(borders)):
+                    if (j == 0 and borders[0] == 0) or (j == len(borders) - 1 and borders[-1] == 1):
+                        continue
+                    seg_out = out[idx == j]
+                    seg_k2 = k2[idx == j]
+
+                    if seg_out.size > 0:
+                        spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                        density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+                    else:
+                        spearman[i, j] = 0
+                        density[i, j] = 0
 
         if print_results:
             file_names = []
@@ -1013,12 +1031,16 @@ def analysis_loop(args, encoder=None):
         else:
             return full_sm.tolist(), density.tolist(), spearman.tolist()
 
-    same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
-        nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],gnoise=data_args['gnoise'],
-        diff_time=data_args['diff_time'], gaps=data_args['gaps'],
-        crop=data_args['crop'],crop_c = data_args['crop_c'],
-        t_window=data_args['t_window'],t_range=data_args['t_range'],
-        mink=data_args['mink'], maxk=data_args['maxk'])
+    if not args.use_training_data:
+        same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+            nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],gnoise=data_args['gnoise'],
+            diff_time=data_args['diff_time'], gaps=data_args['gaps'],
+            crop=data_args['crop'],crop_c = data_args['crop_c'],
+            t_window=data_args['t_window'],t_range=data_args['t_range'],
+            mink=data_args['mink'], maxk=data_args['maxk'])
+    else:
+        same_data = np.load(os.path.join(args.path_dir, "training_data.npy"))
+        same_k2 = np.load(os.path.join(args.path_dir, "training_k2.npy"))
 
     same_k2 = slim(same_k2[:,:,0])
     same_data = slim(same_data)
@@ -1051,9 +1073,12 @@ def analysis_loop(args, encoder=None):
     print("same")
     same_args = deepcopy(data_args)
     same_args["visible_only"] = False
-    same_fl, same_dn, same_sp = segment_analysis(borders, same_data, same_k2)
+    if not args.print_results:
+        same_fl, same_dn, same_sp = segment_analysis(borders, same_data, same_k2)
 
-    to_save = [[same_args, same_fl, same_dn, same_sp]]
+        to_save = [[same_args, same_fl, same_dn, same_sp]]
+    else:
+        segment_analysis(borders, same_data, same_k2)
 
     if prt_image:
         red_visible = same_data[:, 2, :, :]
@@ -1075,8 +1100,11 @@ def analysis_loop(args, encoder=None):
 
         vis_args = deepcopy(data_args)
         vis_args["visible_only"] = True
-        vis_fl, vis_dn, vis_sp = segment_analysis(borders, vis_data, vis_k2)
-        to_save.append([vis_args, vis_fl, vis_dn, vis_sp])
+        if not args.print_results:
+            vis_fl, vis_dn, vis_sp = segment_analysis(borders, vis_data, vis_k2)
+            to_save.append([vis_args, vis_fl, vis_dn, vis_sp])
+        else:
+            segment_analysis(borders, vis_data, vis_k2)
 
     if prt_time:
         print("all times")
@@ -1094,8 +1122,11 @@ def analysis_loop(args, encoder=None):
         time_args["t_window"] = [-1,-1]
         time_args["t_range"] = -1
         time_args["visible_only"] = False
-        time_fl, time_dn, time_sp = segment_analysis(borders, all_data, all_k2)
-        to_save.append([time_args, time_fl, time_dn, time_sp])
+        if not args.print_results:
+            time_fl, time_dn, time_sp = segment_analysis(borders, all_data, all_k2)
+            to_save.append([time_args, time_fl, time_dn, time_sp])
+        else:
+            segment_analysis(borders, all_data, all_k2)
 
     if prt_energy:
         print("all energies")
@@ -1117,8 +1148,11 @@ def analysis_loop(args, encoder=None):
         energy_args["mink"] = 0
         energy_args["maxk"] = 1
         energy_args["visible_only"] = False
-        energy_fl, energy_dn, energy_sp = segment_analysis(new_borders, all_data, all_k2)
-        to_save.append([energy_args, energy_fl, energy_dn, energy_sp])
+        if not args.print_results:
+            energy_fl, energy_dn, energy_sp = segment_analysis(new_borders, all_data, all_k2)
+            to_save.append([energy_args, energy_fl, energy_dn, energy_sp])
+        else:
+            segment_analysis(new_borders, all_data, all_k2)
 
     if args.nnoise != data_args["nnoise"] or args.gnoise != data_args["gnoise"]:
         print("args-specified noise")
@@ -1135,51 +1169,55 @@ def analysis_loop(args, encoder=None):
         noise_args = deepcopy(data_args)
         noise_args["nnoise"] = args.nnoise
         noise_args["visible_only"] = False
-        noise_fl, noise_dn, noise_sp = segment_analysis(borders, noise_data, noise_k2)
-        to_save.append([noise_args, noise_fl, noise_dn, noise_sp])
+        if not args.print_results:
+            noise_fl, noise_dn, noise_sp = segment_analysis(borders, noise_data, noise_k2)
+            to_save.append([noise_args, noise_fl, noise_dn, noise_sp])
+        else:
+            segment_analysis(borders, noise_data, noise_k2)
 
     if not os.path.isfile("data/master_experiments.json"):
         open("data/master_experiments.json", "w")
 
-    with open("data/master_experiments.json", "r+") as fp:
-        if os.stat("data/master_experiments.json").st_size == 0:
-            all_experiments = {}
-        else:
-            all_experiments = json.load(fp)
+    if not args.print_results:
+        with open("data/master_experiments.json", "r+") as fp:
+            if os.stat("data/master_experiments.json").st_size == 0:
+                all_experiments = {}
+            else:
+                all_experiments = json.load(fp)
 
-        for i in range(0, len(b)):
-            file_name = load_files[i][:-4]
-            file_name = file_name[file_name.rfind('/') + 1:]
+            for i in range(0, len(b)):
+                file_name = load_files[i][:-4]
+                file_name = file_name[file_name.rfind('/') + 1:]
 
-            experiment_name = load_files[i]
-            experiment_name = experiment_name[:experiment_name.rfind('/')]
-            experiment_name = experiment_name[experiment_name.rfind('/') + 1:]
+                experiment_name = load_files[i]
+                experiment_name = experiment_name[:experiment_name.rfind('/')]
+                experiment_name = experiment_name[experiment_name.rfind('/') + 1:]
 
-            for instance in to_save:
-                dict = {}
-                dict["experiment_name"] = experiment_name
-                dict["old_params"] = data_args
-                dict["new_params"] = instance[0]
-                dict["epoch"] = file_name
-                dict["full_speaman"] = instance[1][i]
-                dict["density"] = instance[2][i]
-                dict["spearman"] = instance[3][i]
+                for instance in to_save:
+                    dict = {}
+                    dict["experiment_name"] = experiment_name
+                    dict["old_params"] = data_args
+                    dict["new_params"] = instance[0]
+                    dict["epoch"] = file_name
+                    dict["full_speaman"] = instance[1][i]
+                    dict["density"] = instance[2][i]
+                    dict["spearman"] = instance[3][i]
 
-                is_duplicate = False
-                for key, value in all_experiments.items():
-                    this_duplicate = True
-                    for kk in ["experiment_name", "old_params", "new_params", "epoch"]:
-                        if dict[kk] != value[kk]:
-                            this_duplicate = False
+                    is_duplicate = False
+                    for key, value in all_experiments.items():
+                        this_duplicate = True
+                        for kk in ["experiment_name", "old_params", "new_params", "epoch"]:
+                            if dict[kk] != value[kk]:
+                                this_duplicate = False
 
-                    if this_duplicate:
-                        is_duplicate = True
+                        if this_duplicate:
+                            is_duplicate = True
 
-                if not is_duplicate:
-                    all_experiments[str(datetime.datetime.now())] = dict
-        fp.seek(0)
-        json.dump(all_experiments, fp, indent=4)
-        fp.truncate()
+                    if not is_duplicate:
+                        all_experiments[str(datetime.datetime.now())] = dict
+            fp.seek(0)
+            json.dump(all_experiments, fp, indent=4)
+            fp.truncate()
 
 def main(args):
     global verbose
@@ -1244,6 +1282,9 @@ if __name__ == '__main__':
     parser.add_argument('--img_size', default=32, type=int)
     parser.add_argument('--diff_time', default=0.5, type=float)
 
+    parser.add_argument('--save_training_data', default=False, action='store_true')
+    parser.add_argument('--use_training_data', default=False, action='store_true')
+
     parser.add_argument('--gaps', default="-1,-1", type=str)
     parser.add_argument('--crop', default=1.0, type=float)
     parser.add_argument('--crop_c', default="-1,-1", type=str)
@@ -1268,6 +1309,7 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', default=False, action='store_true')
     parser.add_argument('--validation', default=False, action='store_true')
     parser.add_argument('--silent', default=False, action='store_true')
+    parser.add_argument('--print_results', default=False, action='store_true')
 
     # Optimizer options
     parser.add_argument('--epochs', default=100, type=int)
