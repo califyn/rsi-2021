@@ -591,7 +591,10 @@ def supervised_loop(args, encoder=None):
     file_to_update = open(os.path.join(args.path_dir, 'training_loss.log'), 'w')
     torch.save(dict(epoch=0, state_dict=b.state_dict()), os.path.join(args.path_dir, '0.pth'))
 
-    loss = torch.nn.MSELoss()
+    if args.sup_loss == "l1":
+        loss = torch.nn.L1Loss()
+    elif args.sup_loss == "mse":
+        loss = torch.nn.MSELoss()
 
     data_args = vars(args)
 
@@ -959,20 +962,28 @@ def analysis_loop(args, encoder=None):
         shape.pop(1)
         return np.reshape(arr, tuple(shape))
 
-    def segment_analysis(borders, data, k2, print_results=args.print_results):
+    def segment_analysis(borders, q_borders, data, k2, q, print_results=args.print_results):
         k2 = k2.ravel()
         idx = np.searchsorted(borders, k2).ravel()
+        q_idx = np.searchsorted(q_borders, q).ravel()
 
-        density = np.zeros((len(b), len(borders)))
-        spearman = np.zeros((len(b), len(borders)))
+        fine_density = np.zeros((len(b), len(borders) + 1, len(q_borders) + 1))
+        fine_spearman = np.zeros((len(b), len(borders) + 1, len(q_borders) + 1))
+        q_density = np.zeros((len(b), len(q_borders) + 1))
+        q_spearman = np.zeros((len(b), len(q_borders) + 1))
+        k_density = np.zeros((len(b), len(borders) + 1))
+        k_spearman = np.zeros((len(b), len(borders) + 1))
+        full_dn = np.zeros((len(b)))
         full_sm = np.zeros((len(b)))
 
         data = torch.FloatTensor(data)
         if torch.cuda.is_available():
             data = data.cuda()
 
-        lens = [borders[0]] + list(np.array(borders[1:]) - np.array(borders[:-1]))
+        lens = [borders[0]] + list(np.array(borders[1:]) - np.array(borders[:-1])) + list(1 - np.array([borders[-1]]))
         lens = np.array(lens)
+        q_lens = [q_borders[0] + 3.1415] + list(np.array(q_borders[1:]) - np.array(q_borders[:-1])) + list(3.1415 - np.array([q_borders[-1]]))
+        q_lens = np.array(q_lens)
 
         for i in range(0, len(b)):
             b[i].eval()
@@ -994,19 +1005,37 @@ def analysis_loop(args, encoder=None):
                     out = spectral.fit_transform(out)
 
                 full_sm[i] = stats.spearmanr(out.ravel(), k2).correlation
+                full_dn[i] = (np.quantile(out, 0.75) - np.quantile(out, 0.25)) / (0.5 * np.sum(lens))
 
-                for j in range(0, len(borders)):
-                    if (j == 0 and borders[0] == 0) or (j == len(borders) - 1 and borders[-1] == 1):
+                for j in range(0, len(q_borders) + 1):
+                    seg_out = out[q_idx == j]
+                    seg_k2 = k2[q_idx == j]
+                    if np.size(seg_out, axis=0) <= 1:
                         continue
+
+                    q_spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                    q_density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * q_lens[j]))
+
+                for j in range(0, len(borders) + 1):
                     seg_out = out[idx == j]
                     seg_k2 = k2[idx == j]
+                    if np.size(seg_out, axis=0) <= 1:
+                        continue
 
-                    if seg_out.size > 0:
-                        spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
-                        density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
-                    else:
-                        spearman[i, j] = 0
-                        density[i, j] = 0
+                    k_spearman[i, j] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                    k_density[i, j] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j]))
+
+                    for k in range(0, len(q_borders) + 1):
+                        good_idx = np.ones(idx.shape)
+                        good_idx[idx != j] = 0
+                        good_idx[q_idx != k] = 0
+                        seg_out = out[good_idx == 1]
+                        seg_k2 = k2[good_idx == 1]
+                        if np.size(seg_out, axis=0) <= 5:
+                            continue
+
+                        fine_spearman[i, j, k] = stats.spearmanr(seg_out.ravel(), seg_k2).correlation
+                        fine_density[i, j, k] = np.reciprocal((np.quantile(seg_out, 0.75) - np.quantile(seg_out, 0.25)) / (0.5 * lens[j] * q_lens[k]))
 
         if print_results:
             file_names = []
@@ -1015,35 +1044,45 @@ def analysis_loop(args, encoder=None):
                 file_name = file_name[file_name.rfind('/') + 1:]
                 file_names.append(file_name)
 
-            density = density.round(decimals=3)
-            full_sm = full_sm.round(decimals=3)
-            spearman = spearman.round(decimals=3)
+            full_dn = full_dn.round(decimals=5)
+            full_sm = full_sm.round(decimals=5)
+            k_density = k_density.round(decimals=5)
+            k_spearman = k_spearman.round(decimals=5)
+            q_density = q_density.round(decimals=5)
+            q_spearman = q_spearman.round(decimals=5)
+            fine_density = fine_density.round(decimals=5)
+            fine_spearman = fine_spearman.round(decimals=5)
 
             print("density")
             for i in range(0, len(b)):
-                print(file_names[i] + " " + np.array2string(density[i]))
+                print(file_names[i] + " " + str(full_dn[i]) + " " + np.array2string(k_density[i]) + " " + np.array2string(q_density[i]))
+                print(np.array2string(fine_density[i]))
             print("")
             print("spearman")
             for i in range(0, len(b)):
-                print(file_names[i] + " " + str(full_sm[i])+ " " + np.array2string(spearman[i]))
+                print(file_names[i] + " " + str(full_sm[i])+ " " + np.array2string(k_spearman[i]) + " " + np.array2string(q_spearman[i]))
+                print(np.array2string(fine_spearman[i]))
             print("")
             return
         else:
-            return full_sm.tolist(), density.tolist(), spearman.tolist()
+            return [full_dn.tolist(), full_sm.tolist(), k_density.tolist(), k_spearman.tolist(), q_density.tolist(), q_spearman.tolist(), fine_density.tolist(), fine_spearman.tolist()]
 
     if not args.use_training_data:
-        same_k2, same_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+        same_k2, same_data, same_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
             nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],gnoise=data_args['gnoise'],
-            diff_time=data_args['diff_time'], gaps=data_args['gaps'],
+            diff_time=data_args['diff_time'], gaps=args.gaps,
             crop=data_args['crop'],crop_c = data_args['crop_c'],
             t_window=data_args['t_window'],t_range=data_args['t_range'],
-            mink=data_args['mink'], maxk=data_args['maxk'])
+            mink=args.mink, maxk=args.maxk)
     else:
         same_data = np.load(os.path.join(args.path_dir, "training_data.npy"))
         same_k2 = np.load(os.path.join(args.path_dir, "training_k2.npy"))
 
     same_k2 = slim(same_k2[:,:,0])
+    same_q = slim(same_q[:,:,0])
     same_data = slim(same_data)
+
+    to_save = []
 
     num_gaps = data_args['gaps'][0]
     if num_gaps == -1:
@@ -1068,17 +1107,17 @@ def analysis_loop(args, encoder=None):
         borders.append(borders[-1] + btwn_width)
         borders.append(borders[-1] + gap_width)
     borders.append(borders[-1] + btwn_width)
-    borders.append(data_args['maxk'])
+
+    q_borders = np.array([0,1/7,2/7,3/7,4/7,5/7,6/7,1])
+    q_borders = np.min(same_q) + q_borders * (np.max(same_q) - np.min(same_q))
 
     print("same")
     same_args = deepcopy(data_args)
-    same_args["visible_only"] = False
+    same_args["test_mode"] = "same"
     if not args.print_results:
-        same_fl, same_dn, same_sp = segment_analysis(borders, same_data, same_k2)
-
-        to_save = [[same_args, same_fl, same_dn, same_sp]]
+        to_save.append([same_args] + segment_analysis(borders, q_borders, same_data, same_k2, same_q))
     else:
-        segment_analysis(borders, same_data, same_k2)
+        segment_analysis(borders, q_borders, same_data, same_k2, same_q)
 
     if prt_image:
         red_visible = same_data[:, 2, :, :]
@@ -1097,18 +1136,21 @@ def analysis_loop(args, encoder=None):
 
         vis_data = same_data[visible == 1, ...]
         vis_k2 = same_k2[visible == 1, ...]
+        vis_q = same_q[visible == 1, ...]
+
+        visq_borders = np.array([0,1/7,2/7,3/7,4/7,5/7,6/7,1])
+        visq_borders = np.min(vis_q) + visq_borders * (np.max(vis_q) - np.min(vis_q))
 
         vis_args = deepcopy(data_args)
-        vis_args["visible_only"] = True
+        vis_args["test_mode"] = "visible"
         if not args.print_results:
-            vis_fl, vis_dn, vis_sp = segment_analysis(borders, vis_data, vis_k2)
-            to_save.append([vis_args, vis_fl, vis_dn, vis_sp])
+            to_save.append([vis_args] + segment_analysis(borders, visq_borders, vis_data, vis_k2, vis_q))
         else:
-            segment_analysis(borders, vis_data, vis_k2)
+            segment_analysis(borders, visq_borders, vis_data, vis_k2, vis_q)
 
     if prt_time:
         print("all times")
-        all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+        all_k2, all_data, all_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
             nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],
             diff_time=data_args['diff_time'], gaps=data_args['gaps'],
             crop=data_args['crop'],crop_c = data_args['crop_c'],
@@ -1117,20 +1159,23 @@ def analysis_loop(args, encoder=None):
 
         all_k2 = slim(all_k2[:,:,0])
         all_data = slim(all_data)
+        all_q = slim(all_q[:,:,0])
+
+        allq_borders = np.array([0,1/7,2/7,3/7,4/7,5/7,6/7,1])
+        allq_borders = np.min(all_q) + allq_borders * (np.max(all_q) - np.min(all_q))
 
         time_args = deepcopy(data_args)
         time_args["t_window"] = [-1,-1]
         time_args["t_range"] = -1
-        time_args["visible_only"] = False
+        time_args["test_mode"] = "time"
         if not args.print_results:
-            time_fl, time_dn, time_sp = segment_analysis(borders, all_data, all_k2)
-            to_save.append([time_args, time_fl, time_dn, time_sp])
+            to_save.append([time_args] + segment_analysis(borders, allq_borders, all_data, all_k2, all_q))
         else:
-            segment_analysis(borders, all_data, all_k2)
+            segment_analysis(borders, allq_borders, all_data, all_k2, all_q)
 
     if prt_energy:
         print("all energies")
-        all_k2, all_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+        all_k2, all_data, all_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
             nnoise=data_args['nnoise'],uniform=True,img_size=data_args['img_size'],
             diff_time=data_args['diff_time'], gaps=[-1,-1],gnoise=data_args['gnoise'],
             crop=data_args['crop'],crop_c = data_args['crop_c'],
@@ -1139,24 +1184,26 @@ def analysis_loop(args, encoder=None):
 
         all_k2 = slim(all_k2[:,:,0])
         all_data = slim(all_data)
+        all_q = slim(all_q[:,:,0])
 
         new_borders = np.array([0, 1/7, 2/7, 3/7, 4/7, 5/7, 6/7, 1])
-        new_borders = new_borders * (data_args['maxk'] - data_args['mink']) + data_args['mink']
+
+        allq_borders = np.array([0,1/7,2/7,3/7,4/7,5/7,6/7,1])
+        allq_borders = np.min(all_q) + allq_borders * (np.max(all_q) - np.min(all_q))
 
         energy_args = deepcopy(data_args)
         energy_args["gaps"] = [-1,-1]
         energy_args["mink"] = 0
         energy_args["maxk"] = 1
-        energy_args["visible_only"] = False
+        energy_args["test_mode"] = "energy"
         if not args.print_results:
-            energy_fl, energy_dn, energy_sp = segment_analysis(new_borders, all_data, all_k2)
-            to_save.append([energy_args, energy_fl, energy_dn, energy_sp])
+            to_save.append([energy_args] + segment_analysis(new_borders, allq_borders, all_data, all_k2, all_q))
         else:
-            segment_analysis(new_borders, all_data, all_k2)
+            segment_analysis(new_borders, allq_borders, all_data, all_k2, all_q)
 
     if args.nnoise != data_args["nnoise"] or args.gnoise != data_args["gnoise"]:
         print("args-specified noise")
-        noise_k2, noise_data, _ = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
+        noise_k2, noise_data, noise_q = pendulum_train_gen(data_size=args.data_size,traj_samples=1,
             nnoise=args.nnoise,uniform=True,img_size=data_args['img_size'],
             diff_time=data_args['diff_time'], gaps=data_args['gaps'],
             crop=data_args['crop'],crop_c = data_args['crop_c'],gnoise=args.gnoise,
@@ -1165,13 +1212,13 @@ def analysis_loop(args, encoder=None):
 
         noise_k2 = slim(noise_k2[:,:,0])
         noise_data = slim(noise_data)
+        noise_q = slim(noise_q[:,:,0])
 
         noise_args = deepcopy(data_args)
         noise_args["nnoise"] = args.nnoise
-        noise_args["visible_only"] = False
+        noise_args["test_mode"] = "noise"
         if not args.print_results:
-            noise_fl, noise_dn, noise_sp = segment_analysis(borders, noise_data, noise_k2)
-            to_save.append([noise_args, noise_fl, noise_dn, noise_sp])
+            to_save.append([noise_args] + segment_analysis(borders, q_borders, noise_data, noise_k2, noise_q))
         else:
             segment_analysis(borders, noise_data, noise_k2)
 
@@ -1199,9 +1246,14 @@ def analysis_loop(args, encoder=None):
                     dict["old_params"] = data_args
                     dict["new_params"] = instance[0]
                     dict["epoch"] = file_name
-                    dict["full_speaman"] = instance[1][i]
-                    dict["density"] = instance[2][i]
-                    dict["spearman"] = instance[3][i]
+                    dict["full_density"] = instance[1][i]
+                    dict["full_spearman"] = instance[2][i]
+                    dict["k_density"] = instance[3][i]
+                    dict["k_spearman"] = instance[4][i]
+                    dict["q_density"] = instance[5][i]
+                    dict["q_spearman"] = instance[6][i]
+                    dict["fine_density"] = instance[7][i]
+                    dict["fine_spearman"] = instance[8][i]
 
                     is_duplicate = False
                     for key, value in all_experiments.items():
@@ -1319,6 +1371,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', default=0.02, type=float)
     parser.add_argument('--pred_lr', default=0.02, type=float)
     parser.add_argument('--wd', default=0.001, type=float)
+    parser.add_argument('--sup_loss', default='mse', type=str)
     parser.add_argument('--cosine', default=False, action='store_true')
 
     parser.add_argument('--temp', default=0.1, type=float)
