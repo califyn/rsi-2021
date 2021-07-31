@@ -9,11 +9,13 @@ except Exception:
     matplotlib.use('ps')
     pass
 import matplotlib.pyplot as plt
+import seaborn as sns
 
+sns.set_theme(context="paper", style="ticks")
 expname = "midgapm"
 
 gap_borders = True
-
+gaps_adjust = True
 with open("../data/master_experiments.json", "r") as f:
     data = json.load(f)
 
@@ -86,15 +88,50 @@ splot_resp= []
 for it, i in enumerate(orig_gaps):
     splot_res.append(np.mean(sres[it]))
     splot_resp.append(np.mean(sresp[it,:,2:-1:2]))
-    plot_res.append(np.mean(res[it,np.argwhere(ok[it]==1)]))
-    plot_resp.append(np.mean(resp[it,np.argwhere(ok[it]==1),2:-1:2]))
+    if gaps_adjust:
+        plot_res.append(np.mean(res[it,np.argwhere(ok[it]==1)]))
+        plot_resp.append(np.mean(resp[it,np.argwhere(ok[it]==1),2:-1:2]))
+    else:
+        plot_res.append(np.mean(res[it,:]))
+        plot_resp.append(np.mean(resp[it,:,2:-1:2]))
 def OneMinusLog(arr):
     return -1 * (np.log(1 - arr))
 
 def OneMinusLogInv(arr):
     return 1 - np.exp(-1 * arr)
 
+palette = sns.color_palette("Set2")
 fig, ax1 = plt.subplots()
+
+ax1.set_xlabel("Total Gap Size")
+ax1.set_ylabel("Global Spearman", color=palette[0])
+ax1.spines["left"].set_color(palette[0])
+ax1.tick_params(axis='y', colors=palette[0])
+ax1.spines["top"].set_visible(False)
+
+ax1.plot(orig_gaps, plot_res, lw=0.75, color=palette[0], label="Global Self-supervised")
+ax1.plot(orig_gaps, splot_res, lw=0.75, color=palette[0], linestyle="--", label="Global Supervised")
+
+ax1.scatter(0.1,0.99383, color="white")
+
+ax2=ax1.twinx()
+
+ax2.set_ylabel("Interpolation Spearman", color=palette[1])
+ax2.spines["right"].set_color(palette[1])
+ax2.tick_params(axis='y', colors=palette[1])
+ax2.tick_params(axis='x', colors='k')
+ax2.spines["top"].set_visible(False)
+ax2.spines["left"].set_color(palette[0])
+
+ax2.plot(orig_gaps, plot_resp, lw=0.75, color=palette[1], label="Interpolation Self-supervised")
+ax2.plot(orig_gaps, splot_resp, lw=0.75, color=palette[1], linestyle="--", label="Interpolation Supervised")
+
+fig.tight_layout()
+fig.legend(loc="lower left", bbox_to_anchor=(0,0), bbox_transform=ax2.transAxes)
+plt.show()
+
+
+"""fig, ax1 = plt.subplots()
 
 ax1.set_xlabel("Gap Size")
 ax1.set_ylabel("Global Spearman", color=[1,0,0])
@@ -116,7 +153,7 @@ ax2.plot(orig_gaps, splot_resp, lw=0.75, color=[0,1,0], linestyle="--")
 fig.tight_layout()
 plt.show()
 
-plt.clf()
+plt.clf()"""
 
 """plt.xscale('linear')
 plt.yscale('linear')

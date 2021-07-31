@@ -10,10 +10,12 @@ except Exception:
     matplotlib.use('ps')
     pass
 import matplotlib.pyplot as plt
+import seaborn as sns
 
+sns.set_theme(context="paper", style="ticks")
 expname = "spreadgapm"
 
-gap_borders = False
+gap_borders = True
 
 with open("../data/master_experiments.json", "r") as f:
     data = json.load(f)
@@ -137,28 +139,38 @@ def OneMinusLog(arr):
 def OneMinusLogInv(arr):
     return 1 - np.exp(-1 * arr)
 
+palette = sns.color_palette("Set2")
 fig, ax1 = plt.subplots()
 
-ax1.set_xlabel("Gap Size")
-ax1.set_ylabel("Normal Spearman", color=[1,0,0])
-ax1.tick_params(axis='y', labelcolor=[1,0,0])
+ax1.set_xlabel("Total Gap Size")
+ax1.set_ylabel("Global Spearman", color=palette[0])
+ax1.spines["left"].set_color(palette[0])
+ax1.tick_params(axis='y', colors=palette[0])
+ax1.spines["top"].set_visible(False)
 
-ax1.plot(orig_gaps, plot_res_dark, lw=0.5, color=[0.5,0,0])
-ax1.plot(orig_gaps, plot_res, lw=0.75, color=[1,0,0])
-ax1.plot(orig_gaps, splot_res, lw=0.75, color=[1,0,0], linestyle="--")
+ax1.plot(orig_gaps, plot_res, lw=0.75, color=palette[0], label="Global Self-supervised")
+ax1.plot(orig_gaps, splot_res, lw=0.75, color=palette[0], linestyle="--", label="Global Supervised")
+
+ax1.scatter(0.1,0.99383, color="white")
+ax1.axhline(y=0.9938278137526757, lw=0.4, linestyle="-", c=palette[0], xmin=0.8)
+ax1.axhline(y=0.993669710607535, lw=0.4, linestyle="--", c=palette[0], xmin=0.8)
+ax1.axhline(y=0.9938278137526757, lw=0.4, linestyle="-", c=list(palette[0]) + [0.3], xmax=0.8)
+ax1.axhline(y=0.993669710607535, lw=0.4, linestyle="--", c=list(palette[0]) + [0.3], xmax=0.8)
 
 ax2=ax1.twinx()
 
-ax2.set_yscale('function', functions=(OneMinusLog, OneMinusLogInv))
-ax2.set_ylabel("Interpolation Spearman", color=[0,1,0])
-ax2.tick_params(axis='y', labelcolor=[0,1,0])
+ax2.set_ylabel("Adjusted Interpolation Spearman", color=palette[1])
+ax2.spines["right"].set_color(palette[1])
+ax2.tick_params(axis='y', colors=palette[1])
+ax2.tick_params(axis='x', colors='k')
+ax2.spines["top"].set_visible(False)
+ax2.spines["left"].set_color(palette[0])
 
-ax2.plot(orig_gaps, plot_resp_dark, lw=0.5, color=[0,0.5,0])
-ax2.plot(orig_gaps, plot_resp, lw=0.75, color=[0,1,0])
-ax2.plot(orig_gaps, splot_resp, lw=0.75, color=[0,1,0], linestyle="--")
-
+ax2.plot(orig_gaps, plot_resp, lw=0.75, color=palette[1], label="Interpolation Self-supervised")
+ax2.plot(orig_gaps, splot_resp, lw=0.75, color=palette[1], linestyle="--", label="Interpolation Supervised")
 
 fig.tight_layout()
+fig.legend(loc="lower left", bbox_to_anchor=(0,0), bbox_transform=ax2.transAxes)
 plt.show()
 
 #plt.clf()

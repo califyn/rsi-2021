@@ -9,8 +9,10 @@ except Exception:
     matplotlib.use('ps')
     pass
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-expname = "nnoise"
+sns.set_theme(context="paper", style="ticks")
+expname = "inoise"
 
 with open("../data/master_experiments.json", "r") as f:
     data = json.load(f)
@@ -45,11 +47,11 @@ for key in data.keys():
     num = exp[exp.rfind("_") + 1:]
 
     if sup:
-        sres[noises.index(num), trial] = data[key]["full_speaman"]
-        sresp[noises.index(num), trial] = np.array(data[key]["spearman"])[1:-1]
+        sres[noises.index(num), trial] = data[key]["full_spearman"]
+        sresp[noises.index(num), trial] = np.array(data[key]["k_spearman"])[1:-1]
     else:
-        res[noises.index(num), trial] = data[key]["full_speaman"]
-        resp[noises.index(num), trial] = np.array(data[key]["spearman"])[1:-1]
+        res[noises.index(num), trial] = data[key]["full_spearman"]
+        resp[noises.index(num), trial] = np.array(data[key]["k_spearman"])[1:-1]
 
 w = plt.get_cmap('plasma')
 res = np.abs(res)
@@ -61,7 +63,6 @@ sresp = np.abs(sresp)
 #resp = np.log(1 - resp)
 #sres = np.log(1 - sres)
 #sresp = np.log(1 - sresp)
-
 res = np.mean(res, axis=1)
 resp = np.mean(resp, axis=1)
 sres = np.mean(sres, axis=1)
@@ -75,34 +76,50 @@ def OneMinusLog(arr):
 def OneMinusLogInv(arr):
     return 1 - np.exp(-1 * arr)
 
-
+palette = sns.color_palette("Set2")
 fig, ax1 = plt.subplots()
 
 ax1.set_xscale('log')
 ax1.set_yscale('function', functions=(OneMinusLog, OneMinusLogInv))
-ax1.set_xlabel("Noise")
-ax1.set_ylabel("Global Spearman", color=[1,0,0])
-ax1.tick_params(axis='y', labelcolor=[1,0,0])
+ax1.set_xlabel("Graphical Noise")
+ax1.set_ylabel("Global Spearman", color=palette[0])
+ax1.spines["left"].set_color(palette[0])
+ax1.tick_params(axis='y', colors=palette[0])
+ax1.spines["top"].set_visible(False)
 
-ax1.plot(orig_noises[1:], res[1:], lw=0.75, color=[1,0,0])
-ax1.plot(orig_noises[1:], sres[1:], lw=0.75, color=[1,0,0], linestyle="--")
+ax1.plot(orig_noises[1:], res[1:], lw=0.75, color=palette[0], label="Global Self-supervised")
+ax1.plot(orig_noises[1:], sres[1:], lw=0.75, color=palette[0], linestyle="--", label="Global Supervised")
 
 ax1.scatter(0.1,0.99383, color="white")
-ax1.axhline(y=0.9938278137526757, lw=0.75, linestyle="-", c=[1,0.5,0.5])
-ax1.axhline(y=0.993669710607535, lw=0.75, linestyle="--", c=[1,0.5,0.5])
+ax1.axhline(y=0.9938278137526757, lw=0.4, linestyle="-", c=palette[0], xmin=0.8)
+ax1.axhline(y=0.993669710607535, lw=0.4, linestyle="--", c=palette[0], xmin=0.8)
+ax1.axhline(y=0.9938278137526757, lw=0.4, linestyle="-", c=list(palette[0]) + [0.3], xmax=0.8)
+ax1.axhline(y=0.993669710607535, lw=0.4, linestyle="--", c=list(palette[0]) + [0.3], xmax=0.8)
 ax2=ax1.twinx()
 
 ax2.set_yscale('function', functions=(OneMinusLog, OneMinusLogInv))
-ax2.set_ylabel("Local Spearman", color=[0,1,0])
-ax2.tick_params(axis='y', labelcolor=[0,1,0])
+ax2.set_ylabel("Avg. Local Spearman", color=palette[1])
+ax2.spines["right"].set_color(palette[1])
+ax2.tick_params(axis='y', colors=palette[1])
+ax2.tick_params(axis='x', colors='k')
+ax2.spines["top"].set_visible(False)
+ax2.spines["left"].set_color(palette[0])
 
-ax2.plot(orig_noises[1:], np.mean(resp[1:],axis=1), lw=0.75, color=[0,1,0])
-ax2.plot(orig_noises[1:], np.mean(sresp[1:],axis=1), lw=0.75, color=[0,1,0], linestyle="--")
+ax2.scatter(0.1,0.815,c="white")
 
-ax2.axhline(y=0.8092634019325426, lw=0.75, linestyle="-", c=[0.5,1,0.5])
-ax2.axhline(y=0.8043783294835989, lw=0.75, linestyle="--", c=[0.5,1,0.5])
+ax2.plot(orig_noises[1:], np.mean(resp[1:],axis=1), lw=0.75, color=palette[1], label="Local Self-supervised")
+ax2.plot(orig_noises[1:], np.mean(sresp[1:],axis=1), lw=0.75, color=palette[1], linestyle="--", label="Local Supervised")
 
+ax2.axhline(y=0.8092634019325426, lw=0.4, linestyle="-", c=palette[1], xmin=0.8)
+ax2.axhline(y=0.8043783294835989, lw=0.4, linestyle="--", c=palette[1], xmin=0.8)
+ax2.axhline(y=0.8092634019325426, lw=0.4, linestyle="-", c=list(palette[1]) + [0.3], xmax=0.8)
+ax2.axhline(y=0.8043783294835989, lw=0.4, linestyle="--", c=list(palette[1]) + [0.3], xmax=0.8)
+
+ax2.text(0.71, 0.9, "Zero noise baseline", transform=ax2.transAxes) 
+
+sns.despine(right=False)
 fig.tight_layout()
+fig.legend(loc="lower left", bbox_to_anchor=(0,0), bbox_transform=ax2.transAxes)
 plt.show()
 
 plt.clf()
