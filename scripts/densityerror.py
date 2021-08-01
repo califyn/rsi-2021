@@ -11,7 +11,9 @@ except Exception:
     pass
 import matplotlib.pyplot as plt
 import json
+import seaborn as sns
 
+sns.set_theme(context="paper", style="ticks")
 from sklearn.neural_network import MLPRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
@@ -22,8 +24,8 @@ def run_cmd(cmds, gpu):
         subprocess.run(cmd  + " --silent --gpu=" + str(gpu), shell=True)
 
 if __name__ == "__main__":
-    #names = ["vnladim_1", "dataset_5120", "inoise_inf", "nnoise_inf", "nnoise_1"]
-    names = ["nnoise"]
+    names = ["vnladim_1", "dataset_5120", "inoise_inf", "nnoise_inf"]
+    #names = ["nnoise"]
     exps = [f.name for f in os.scandir("../../output/pendulum") if f.is_dir()]
     myexps = []
     short_cmd = []
@@ -72,13 +74,15 @@ if __name__ == "__main__":
     with open("../data/master_experiments.json") as f:
         data = json.load(f)
     
-    borders = np.array([1/7,2/7,3/7,4/7,5/7,6/7,1]).ravel()
+    splitsize=7
+    borders = (np.array(range(splitsize)).ravel() + 1) * 1/splitsize
     stdev = []
     dens = []
-    for i in range(0,7):
+    for i in range(0,splitsize):
         stdev.append([])
         dens.append([])
     for k in myexps:
+        print(k)
         num = k[k.rfind("_")+1:]
         if num != "inf":
             num = int(num)
@@ -99,38 +103,32 @@ if __name__ == "__main__":
         mlp = RandomForestRegressor()
         mlp.fit(test_coded.reshape(-1,1),test_energy.reshape(-1,))
 
-        thisdens = []
-
-        for key in data.keys():
-            if data[key]["experiment_name"] == k:# and data[key]["new_params"]["nnoise"] == 0 and data[key]["new_params"]["gnoise"] == 0:
-                thisdens = data[key]["k_density"][1:-1]
-
-        for i in range(0,7):
+        for i in range(0,splitsize):
             p = mlp.predict(coded[good ==i].reshape(-1,1))
+            print(np.quantile(p,0.75)-np.quantile(p,0.25))
+            dens[i].append(np.reciprocal(np.quantile(p,0.75)-np.quantile(p,0.25)) * (0.5 * 1/splitsize))
             p = p.ravel() - energies[good == i]
             p = np.sqrt(np.mean(np.square(p)))
             stdev[i].append(p)
-            dens[i].append(thisdens[i])
-            if thisdens[i] > 1:
-                print(k)
-                print(i)
 
-    linear = LinearRegression()
-    stdev_full = []
-    dens_full = []
-    for i in range(0,7):
-        stdev_full = stdev_full + stdev[i]
-        dens_full = dens_full + dens[i]
-    stdev_full = np.array(stdev_full).ravel().reshape(-1,1)
-    dens_full = np.array(dens_full).ravel().reshape(-1,1)
-    linear.fit(stdev_full, dens_full)
-    m = linear.coef_.ravel()
-    b = linear.intercept_.ravel()
-    print(linear.score(stdev_full, dens_full))
-    xx = np.linspace(np.min(stdev_full), np.max(stdev_full), 500)
-    yy = xx * m + b
+    #linear = LinearRegression()
+    #stdev_full = []
+    #dens_full = []
+    #for i in range(0,splitsize):
+    #    stdev_full = stdev_full + stdev[i]
+    #    dens_full = dens_full + dens[i]
+    #stdev_full = np.array(stdev_full).ravel().reshape(-1,1)
+    #dens_full = np.array(dens_full).ravel().reshape(-1,1)
+    #linear.fit(stdev_full, dens_full)
+    #m = linear.coef_.ravel()
+    #b = linear.intercept_.ravel()
+    #print(linear.score(stdev_full, dens_full))
+    #xx = np.linspace(np.min(stdev_full), np.max(stdev_full), 500)
+    #yy = xx * m + b
 
-    for i in range(0,7):
-        plt.scatter(stdev[i], dens[i], s=0.5, label=str(i))
-    plt.plot(xx, yy, '--', color='k')
+    palette = sns.color_palette("flare_r", n_colors=splitsize)
+    for i in range(0,splitsize):
+        plt.scatter(stdev[i], dens[i], s=0.5, c=palette[i])
+    #plt.plot(xx, yy, '--', color='k')
+    plt.colorbar()
     plt.show()
